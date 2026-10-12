@@ -18,4 +18,6 @@ args=(run --rm --name "eumaeus-$JOB_ID" --cpus "${CPUS:-4}" --memory "${MEMORY:-
 [ -f "$SECRETS" ] && args+=(--env-file "$SECRETS")
 
 echo "job $JOB_ID -> $REPO runner=$RUNNER" >&2
-exec container "${args[@]}" "$IMAGE"
+# container 1.5 honors --rm only on exit 0; remove the VM record ourselves on any exit.
+trap 'container rm -f "eumaeus-$JOB_ID" >/dev/null 2>&1 || true' EXIT
+container "${args[@]}" "$IMAGE"
