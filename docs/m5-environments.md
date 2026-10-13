@@ -1,6 +1,7 @@
 # M5: per-repo environments
 
-Status: plan. Nothing below is built. Measurements are from an Apple silicon Mac on `container` 1.5.0.
+Status: built; [Results](#results) records what changed from the plan. Measurements are from an Apple silicon Mac on
+`container` 1.5.0.
 
 ## A job can't run the checks it is asked to pass
 
@@ -102,7 +103,7 @@ overrides the detected value for that key. Commands are checked against the docs
 
 - Flox has no `setup`. `flox services start` refuses to run outside an activation, and services stop when the
   last activation exits, so `-s` starts them inside the prefix that wraps the agent.
-- Flox documents only multi-user Nix. Step 4 tests it on the single-user install and drops the row if it fails.
+- Flox documents only multi-user Nix. Flox 1.18.1 installed and ran services on the single-user install.
 - `nix develop` points `TMPDIR` at a fresh directory, and the flake sees only files git tracks.
 - `mise exec` installs missing tools before it runs, and has trusted the config it loads since 2026.8.9, so mise
   needs no `setup`.
@@ -117,7 +118,7 @@ Mounting the disk at `/nix` gives the agent user that ownership with no root at 
 
 A fresh volume's root directory is `root:root 0755`, so uid 1000 can't write to it. A volume also starts empty:
 `container` doesn't copy the image's files at the mount point into it. So the template disk is made once, by
-`scripts/disk.sh template`:
+`node scripts/disk.ts template`:
 
 1. `container volume create -s $EUMAEUS_DISK_SIZE eumaeus-template`.
 2. One VM as `--user root` runs `chown agent:agent /nix`.
@@ -196,12 +197,12 @@ Links are generic: eumaeus doesn't need to know `CARGO_TARGET_DIR` or any other 
 
 Each step is one commit, checked before the next starts.
 
-Fixtures live in a public repo, `eumaeus-fixtures`, with one branch per row of the filename table and one for
+Fixtures live in a public repo, [`clayharmon/eumaeus-fixtures`](https://github.com/clayharmon/eumaeus-fixtures), with one branch per row of the filename table and one for
 the Rust and Postgres check below.
 
 1. **Base image.** Add `xz-utils`, `/etc/nix/nix.conf` with flakes enabled, `PATH` entries for the disk's
    Nix profile, and a `/nix` mount point. Check: `pnpm smoke <owner/repo>` passes.
-2. **Template disk.** `scripts/disk.sh template` builds `template.img`; `setup-mac.sh` calls it. Check: a VM
+2. **Template disk.** `node scripts/disk.ts template` builds `template.img`; `setup-mac.sh` calls it. Check: a VM
    on a clone of the template runs `nix run nixpkgs#hello` and `devenv version`. The same check settles whether
    the Nix build sandbox runs in a `container` VM; if it doesn't, `/etc/nix/nix.conf` sets `sandbox = false`.
 3. **Clone, mount, promote.** `runner.ts` creates and clones the volume, `jobs.ts` promotes when the result
@@ -238,3 +239,29 @@ Postgres:
 - `devcontainer.json` features and Compose services, which assume Docker.
 - Garbage collection of disks or the Nix store.
 - Sharing a disk between repos.
+
+## Results
+
+All six checks under "Done when" passed on `rust-postgres`, with the dispatcher on the laptop:
+
+| Check | Result |
+|---|---|
+| An agent job runs `cargo test` against Postgres in the VM | Haiku ran it; the transcript shows `test tests::postgres_agrees_with_add ... ok`; $0.0025 |
+| Second job's setup plus `cargo test` under 25% of the first | 1 s + 2 s against 26 s + 14 s: 7.5% |
+| Two jobs submitted together | both `pushed` |
+| Cancel leaves the golden disk alone | modification time unchanged |
+| Agent exits non-zero after setup | disk promoted |
+| `pnpm smoke` on a branch that declares nothing | `pushed` |
+
+What the build changed from the plan:
+
+- The template script is `node scripts/disk.ts`, which also has `ls` and `reset`, instead of `scripts/disk.sh`.
+- Nix 2.35's installer keeps the user's profile in `~/.local/state`, which is in the VM's home and discarded. The
+  tools go into a second profile on the disk, `/nix/var/nix/profiles/eumaeus`, which the image puts last on `PATH`.
+- The build sandbox is off: Nix reports "the prerequisite namespaces are not available" in a `container` VM.
+- The template disk holds 2.4 GB and takes 71 s to build. `--no-channel-add` saves the nixpkgs channel.
+- A job's disk settles before its status turns terminal. In the first version a follow-up job started 0.1 s after
+  a promote and could have cloned the old disk.
+- `result.env` has `toml`, `detected`, `setup_s`, `disk` (`golden`, `template`, or `none`), and `promoted`.
+- The image sets `FLOX_DISABLE_METRICS=true` and `DO_NOT_TRACK=1`.
+- Node's `COPYFILE_FICLONE_FORCE` returns `ENOSYS` on macOS, so the dispatcher runs `cp -c`.
