@@ -75,15 +75,29 @@ pnpm smoke [url]      # submits a shell job and polls it; sends the token from d
 
 ## Moving it to the mini
 
-On the mini: sign in to Tailscale, install the `container` pkg, `sudo pmset -a sleep 0 disksleep 0`, enable
-auto-login (the `container` service and the launchd agent are per-user and need a logged-in session), install
-mise + node 24 + pnpm, clone this repo. Copy `~/.config/eumaeus/secrets.env` and `github-app.json` from the
-laptop. Run `scripts/setup-mac.sh --serve`, then on the laptop re-point Claude Code at the mini's URL:
+Deployed 2026-10-13 to `clays-mac-mini` (macOS 27.0.1, 16 GB, 12 cores). The dispatcher there listens on
+`127.0.0.1:7777` and `tailscale serve` exposes that one port as `https://clays-mac-mini.<tailnet>.ts.net:7777`.
+Other services on the mini can use 443 or their own ports.
+
+Steps, as run. Everything except step 2 works over ssh from the laptop.
+
+1. Mini: sign in to Tailscale, turn on Remote Login, `ssh-copy-id` the laptop key.
+2. Mini, needs sudo: `installer -pkg container-1.5.0-installer-signed.pkg -target /` and
+   `pmset -a sleep 0 disksleep 0 autorestart 1 womp 1`.
+3. Mini: mise with node 24, `corepack enable pnpm` (the repo pins `pnpm@10.30.2` in `packageManager`).
+4. Clone with the laptop's agent forwarded (`ssh -A`) if the mini's own key is not loaded: the repo is private.
+5. `scp ~/.config/eumaeus/secrets.env ~/.config/eumaeus/github-app.json mini:.config/eumaeus/` and `chmod 600`.
+6. On the mini, `scripts/setup-mac.sh --serve`. 57 s on the first run, image build included.
+7. On the laptop, re-point Claude Code at the mini's URL:
 
 ```
 claude mcp remove eumaeus -s user
 claude mcp add -s user -t http eumaeus https://<mini>.<tailnet>.ts.net:7777/mcp -H "Authorization: Bearer <token from the mini's dispatcher.env>"
 ```
+
+Limit: FileVault is on, so macOS refuses auto-login. After a reboot the mini waits at the unlock screen and
+neither the `container` service nor the launchd agent runs until someone logs in at the keyboard. Turning
+FileVault off and enabling auto-login removes that wait.
 
 Config is env vars with defaults, see `src/config.ts`: `EUMAEUS_HOST`, `EUMAEUS_PORT`, `EUMAEUS_AUTH_TOKEN`,
 `EUMAEUS_DATA`, `EUMAEUS_IMAGE`, `EUMAEUS_MAX_CONCURRENT`, `EUMAEUS_SECRETS`, `EUMAEUS_GITHUB_APP`, `EUMAEUS_GH_USER`,
