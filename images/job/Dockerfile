@@ -27,7 +27,8 @@ RUN usermod -l agent -d /home/agent -m node && groupmod -n agent node \
 RUN apt-get update && apt-get install -y --no-install-recommends xz-utils && rm -rf /var/lib/apt/lists/* \
  && mkdir -m 0755 /nix && chown agent:agent /nix \
  && mkdir -p /etc/nix && printf 'experimental-features = nix-command flakes\nsandbox = false\n' > /etc/nix/nix.conf
-ENV USER=agent NIX_SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+# FLOX_DISABLE_METRICS and DO_NOT_TRACK: no usage metrics from job VMs.
+ENV USER=agent NIX_SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt FLOX_DISABLE_METRICS=true DO_NOT_TRACK=1
 
 USER agent
 # Antigravity CLI installs itself into ~/.local/bin. The server gzips the script without a header.

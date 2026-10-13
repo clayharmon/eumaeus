@@ -10,6 +10,9 @@
 #   antigravity GEMINI_API_KEY; pi any provider key, e.g. ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY, OPENROUTER_API_KEY.
 # Output: the dispatcher mounts a host directory at /out; the agent's own output stream is written there and
 #   outlives the VM. Without /out (scripts/run-job.sh) it stays in /work.
+# Environment (docs/m5-environments.md): SETUP (runs before the agent), SHELL_PREFIX (wraps the agent), CACHE
+#   (newline-separated paths kept on the disk), EUMAEUS_TOML=1 when they came from the repo's .eumaeus.toml.
+#   An unset SETUP or SHELL_PREFIX falls back to the first environment file the repo has.
 # stdout: one JSON line with the outcome, including "usage" once the agent has run. stderr: progress.
 set -euo pipefail
 
@@ -22,6 +25,7 @@ OPEN_PR="${OPEN_PR:-1}"
 AGENT_SUMMARY=""
 COST_LINE=""
 USAGE=""
+ENV_JSON=""
 SETUP_OK=""
 OUT=/work; { [ -d /out ] && [ -w /out ]; } && OUT=/out
 # /nix is the repo's disk when the dispatcher mounts one; the host clones it after exit, so flush it first.
@@ -29,7 +33,13 @@ trap sync EXIT
 
 log() { printf '[job %s] %s\n' "$JOB_ID" "$*" >&2; }
 # setup_ok tells the dispatcher this job's disk may become the repo's golden disk.
-emit() { printf '{"job_id":"%s","status":"%s"%s%s%s}\n' "$JOB_ID" "$1" "${2:-}" "${USAGE:+,\"usage\":$USAGE}" "${SETUP_OK:+,\"setup_ok\":true}"; }
+emit() {
+  local extra="${2:-}"
+  [ -n "$USAGE" ] && extra="$extra,\"usage\":$USAGE"
+  [ -n "$ENV_JSON" ] && extra="$extra,\"env\":$ENV_JSON"
+  [ -n "$SETUP_OK" ] && extra="$extra,\"setup_ok\":true"
+  printf '{"job_id":"%s","status":"%s"%s}\n' "$JOB_ID" "$1" "$extra"
+}
 
 git config --global user.name  "${GIT_AUTHOR_NAME:-eumaeus}"
 git config --global user.email "${GIT_AUTHOR_EMAIL:-eumaeus@users.noreply.github.com}"
@@ -48,6 +58,62 @@ else
   git checkout -q -b "$BRANCH"
   UPSTREAM="origin/$BASE_BRANCH"
 fi
+
+# Repo environment. A detected tool runs from the disk at /nix, which carries Nix, devenv, devbox, mise, and Flox.
+DISK=""; mountpoint -q /nix && [ -d /nix/store ] && DISK=1
+DETECTED=none; D_SETUP=""; D_SHELL=""
+if   [ -f devenv.nix ];              then DETECTED=devenv.nix;  D_SETUP='devenv up -d && devenv processes wait --timeout 120'; D_SHELL='devenv shell --'
+elif [ -f devbox.json ];             then DETECTED=devbox.json; D_SETUP='devbox services up -b'; D_SHELL='devbox run --'
+elif [ -f .flox/env/manifest.toml ]; then DETECTED=.flox;       D_SHELL='flox activate -s --'  # services start inside the activation
+elif [ -f flake.nix ];               then DETECTED=flake.nix;   D_SHELL='nix develop -c'
+elif [ -f mise.toml ];               then DETECTED=mise.toml;   D_SHELL='mise exec --'
+fi
+if [ "$DETECTED" != none ] && [ -z "$DISK" ]; then
+  log "env: $DETECTED needs the disk at /nix and this job has none; running without it"
+  D_SETUP=""; D_SHELL=""
+fi
+SETUP="${SETUP-$D_SETUP}"
+SHELL_PREFIX="${SHELL_PREFIX-$D_SHELL}"
+read -ra PREFIX <<< "$SHELL_PREFIX"
+env_json() {
+  jq -cn --argjson toml "$([ "${EUMAEUS_TOML:-}" = 1 ] && echo true || echo false)" --arg detected "$DETECTED" \
+    --argjson disk "$([ -n "$DISK" ] && echo true || echo false)" --argjson setup_s "${SETUP_S:-null}" \
+    '{toml: $toml, detected: $detected, disk: $disk, setup_s: $setup_s}'
+}
+ENV_JSON="$(env_json)"
+log "env: ${EUMAEUS_TOML:+.eumaeus.toml, }detected $DETECTED, disk $([ -n "$DISK" ] && echo yes || echo no); setup: ${SETUP:-none}; shell: ${SHELL_PREFIX:-none}"
+
+# A cache path becomes a link into the disk, so what tools leave there is on the next job's disk.
+link_cache() {
+  local p="${1%/}" src dst
+  # shellcheck disable=SC2088  # a literal ~/ prefix, matched here and expanded below
+  case "$p" in
+    '~/'*) src="$HOME/${p#\~/}"; dst="/nix/eumaeus/cache/home/${p#\~/}" ;;
+    /*|*..*) log "cache: skipped $p (use a repo path or ~/path, without ..)"; return 0 ;;
+    *)
+      if git ls-files --error-unmatch -- "$p" >/dev/null 2>&1; then log "cache: skipped $p (tracked by git)"; return 0; fi
+      src="/work/repo/$p"; dst="/nix/eumaeus/cache/repo/$p"
+      printf '/%s\n' "$p" >> .git/info/exclude  # never commit the link
+      ;;
+  esac
+  mkdir -p "$dst" "$(dirname "$src")"
+  if [ -e "$src" ] && [ ! -L "$src" ]; then cp -a "$src/." "$dst/" && rm -rf "$src"; fi
+  rm -f "$src"
+  ln -s "$dst" "$src"
+}
+if [ -n "$DISK" ]; then
+  # shellcheck disable=SC2088  # the tilde is literal; link_cache expands it
+  while IFS= read -r p; do [ -n "$p" ] && link_cache "$p"; done < <(printf '~/.cache\n%s\n' "${CACHE:-}")
+fi
+
+if [ -n "$SETUP" ]; then
+  log "setup: $SETUP"
+  t0=$SECONDS; rc=0
+  bash -c "$SETUP" >&2 || rc=$?
+  SETUP_S=$((SECONDS - t0)); ENV_JSON="$(env_json)"
+  if [ "$rc" -ne 0 ]; then log "setup exited $rc after ${SETUP_S}s"; emit failed ",\"error\":\"setup_exit_$rc\""; exit 6; fi
+  log "setup done in ${SETUP_S}s"
+fi
 SETUP_OK=1
 
 log "runner=$RUNNER model=${MODEL:-default}"
@@ -57,6 +123,13 @@ need() { # need <error-code> VAR... : fail unless at least one VAR is non-empty
   log "runner=$RUNNER needs one of: $*"; emit failed ",\"error\":\"$code\""; exit 3
 }
 model_arg() { [ -n "$MODEL" ] && printf '%s' "$MODEL"; }
+# The shell prefix puts the repo's tools first on PATH, node included. Run the agent CLI by its path in the image,
+# and a node-script CLI (codex, pi) with the image's node, so the repo's node version can't break the agent.
+agent_cmd() {
+  local p; p="$(readlink -f "$(command -v "$1")")"
+  if [ "$(head -c 2 "$p")" = '#!' ] && head -n 1 "$p" | grep -q node; then AGENT=("${PREFIX[@]}" /usr/local/bin/node "$p")
+  else AGENT=("${PREFIX[@]}" "$p"); fi
+}
 
 # One log line per interesting agent event, written as the agent works. Non-JSON lines are skipped.
 # Claude Code stream-json: system/init, assistant (text + tool_use blocks), user (tool results), result.
@@ -103,7 +176,8 @@ run_agent() {
       local args=(-p --output-format stream-json --verbose --dangerously-skip-permissions)
       [ -n "$MODEL" ] && args+=(--model "$MODEL")
       local rc=0
-      claude "${args[@]}" "$AGENT_TASK" | tee "$OUT/runner.jsonl" | narrate_claude || rc=${PIPESTATUS[0]}
+      agent_cmd claude
+      "${AGENT[@]}" "${args[@]}" "$AGENT_TASK" | tee "$OUT/runner.jsonl" | narrate_claude || rc=${PIPESTATUS[0]}
       [ "$rc" -eq 0 ] || return "$rc"
       jq -cR 'fromjson? | select(.type == "result")' "$OUT/runner.jsonl" | tail -n 1 > /work/runner.json
       [ -s /work/runner.json ] || { log "claude exited 0 without a result event"; return 5; }
@@ -116,7 +190,8 @@ run_agent() {
       local args=(exec --json --sandbox danger-full-access --skip-git-repo-check --ephemeral -o /work/codex-last.md)
       [ -n "$MODEL" ] && args+=(-m "$MODEL")
       local rc=0
-      codex "${args[@]}" "$AGENT_TASK" | tee "$OUT/runner.jsonl" | narrate_codex || rc=${PIPESTATUS[0]}
+      agent_cmd codex
+      "${AGENT[@]}" "${args[@]}" "$AGENT_TASK" | tee "$OUT/runner.jsonl" | narrate_codex || rc=${PIPESTATUS[0]}
       [ "$rc" -eq 0 ] || return "$rc"
       AGENT_SUMMARY="$(head -c 4000 /work/codex-last.md 2>/dev/null || true)"
       COST_LINE="$(jq -r 'select(.type=="turn.completed") | .usage | "tokens in=\(.input_tokens) cached=\(.cached_input_tokens // 0) out=\(.output_tokens)"' "$OUT/runner.jsonl" | tail -1)"
@@ -125,7 +200,8 @@ run_agent() {
       need no_gemini_credentials GEMINI_API_KEY
       local args=(-p --output-format json --dangerously-skip-permissions)
       [ -n "$MODEL" ] && args+=(--model "$MODEL")
-      agy "${args[@]}" "$AGENT_TASK" > "$OUT/runner.json" || return $?
+      agent_cmd agy
+      "${AGENT[@]}" "${args[@]}" "$AGENT_TASK" > "$OUT/runner.json" || return $?
       [ "$(jq -r '.status // ""' "$OUT/runner.json")" = "SUCCESS" ] || { log "agy status: $(jq -c '{status, error}' "$OUT/runner.json")"; return 5; }
       AGENT_SUMMARY="$(jq -r '.response // ""' "$OUT/runner.json" | head -c 4000)"
       COST_LINE="tokens in=$(jq -r '.usage.input_tokens // "?"' "$OUT/runner.json") out=$(jq -r '.usage.output_tokens // "?"' "$OUT/runner.json") turns=$(jq -r '.num_turns // "?"' "$OUT/runner.json")"
@@ -134,12 +210,13 @@ run_agent() {
       need no_provider_credentials ANTHROPIC_API_KEY OPENAI_API_KEY GEMINI_API_KEY OPENROUTER_API_KEY XAI_API_KEY GROQ_API_KEY MISTRAL_API_KEY
       local args=(-p --no-session --no-approve)
       [ -n "$MODEL" ] && args+=(--model "$MODEL")
-      pi "${args[@]}" "$AGENT_TASK" > "$OUT/runner.txt" || return $?
+      agent_cmd pi
+      "${AGENT[@]}" "${args[@]}" "$AGENT_TASK" > "$OUT/runner.txt" || return $?
       AGENT_SUMMARY="$(tail -c 4000 "$OUT/runner.txt")"
       COST_LINE="usage not reported by pi print mode"
       ;;
     shell)
-      bash -c "$TASK"
+      "${PREFIX[@]}" /bin/bash -c "$TASK"
       ;;
     *)
       log "unknown runner: $RUNNER"; emit failed ',"error":"unknown_runner"'; exit 2
