@@ -61,7 +61,9 @@ Without `.eumaeus.toml`, the first of these files in the repo root decides:
 | `flake.nix` | nothing | `nix develop -c` |
 | `mise.toml` | nothing | `mise exec --` |
 
-`.eumaeus.toml` overrides either column and lists paths to keep between jobs. Every key is optional, and an unknown key fails the job before a VM boots:
+A detected file is best effort. eumaeus runs its setup, then its prefix once with `true`; if either fails, the job runs without the environment, as it would with no file, and `result.env.fallback` says what failed.
+
+`.eumaeus.toml` overrides either column and lists paths to keep between jobs. A value it sets is strict: a failing `setup` or prefix fails the job with `setup_exit_<n>` or `shell_exit_<n>`. `setup = ""` and `shell = ""` turn off what was detected. Every key is optional, and an unknown key fails the job before a VM boots:
 
 ```toml
 setup = "nix develop -c bash scripts/pg-start.sh"   # runs once, before the agent
@@ -69,7 +71,7 @@ shell = "nix develop -c"                            # prefix on the agent comman
 cache = ["target", "~/.cargo"]                      # repo paths or ~/ paths kept on the disk
 ```
 
-`~/.cache` is always kept. A cache path in the repo is added to `.git/info/exclude`, so it is never committed.
+`~/.cache` and `~/.local/share` are always kept, which covers mise's installs. A cache path in the repo is added to `.git/info/exclude`, so it is never committed.
 
 How the disk carries over:
 
@@ -77,7 +79,7 @@ How the disk carries over:
 - A job whose setup worked replaces the repo's disk when it ends, even if the agent failed. A cancelled or timed-out job, or a failed setup, leaves it unchanged.
 - Two jobs on one repo run on separate clones. When both finish, the later one's disk wins.
 - A repo's first job boots on the template disk: Nix 2.35.3, devenv, devbox, mise, and Flox, 2.4 GB, built once by `setup-mac.sh` in about 70 s.
-- `job_status` shows `result.env`: the file that decided, setup seconds, whether the disk came from the repo or the template, and whether it was promoted.
+- `job_status` shows `result.env`: the file that decided, seconds until the environment was ready, `fallback` when a detected file failed, whether the disk came from the repo or the template, and whether it was promoted.
 
 Limits:
 

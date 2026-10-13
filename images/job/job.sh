@@ -72,13 +72,18 @@ if [ "$DETECTED" != none ] && [ -z "$DISK" ]; then
   log "env: $DETECTED needs the disk at /nix and this job has none; running without it"
   D_SETUP=""; D_SHELL=""
 fi
+# A value from .eumaeus.toml is declared: if it fails, the job fails. A detected one is best effort.
+SETUP_FROM=detected; [ -n "${SETUP+x}" ] && SETUP_FROM=declared
+SHELL_FROM=detected; [ -n "${SHELL_PREFIX+x}" ] && SHELL_FROM=declared
 SETUP="${SETUP-$D_SETUP}"
 SHELL_PREFIX="${SHELL_PREFIX-$D_SHELL}"
 read -ra PREFIX <<< "$SHELL_PREFIX"
+FALLBACK=""
 env_json() {
   # The dispatcher adds where the disk came from and whether it was promoted.
   jq -cn --argjson toml "$([ "${EUMAEUS_TOML:-}" = 1 ] && echo true || echo false)" --arg detected "$DETECTED" \
-    --argjson setup_s "${SETUP_S:-null}" '{toml: $toml, detected: $detected, setup_s: $setup_s}'
+    --argjson setup_s "${SETUP_S:-null}" --arg fallback "$FALLBACK" \
+    '{toml: $toml, detected: $detected, setup_s: $setup_s, fallback: (if $fallback == "" then null else $fallback end)}'
 }
 ENV_JSON="$(env_json)"
 log "env: ${EUMAEUS_TOML:+.eumaeus.toml, }detected $DETECTED, disk $([ -n "$DISK" ] && echo yes || echo no); setup: ${SETUP:-none}; shell: ${SHELL_PREFIX:-none}"
@@ -103,17 +108,39 @@ link_cache() {
 }
 if [ -n "$DISK" ]; then
   # shellcheck disable=SC2088  # the tilde is literal; link_cache expands it
-  while IFS= read -r p; do [ -n "$p" ] && link_cache "$p"; done < <(printf '~/.cache\n%s\n' "${CACHE:-}")
+  while IFS= read -r p; do [ -n "$p" ] && link_cache "$p"; done < <(printf '~/.cache\n~/.local/share\n%s\n' "${CACHE:-}")
 fi
 
-if [ -n "$SETUP" ]; then
-  log "setup: $SETUP"
-  t0=$SECONDS; rc=0
-  bash -c "$SETUP" >&2 || rc=$?
+# A detected environment that doesn't come up is dropped, and the job runs as it did before M5. Running the prefix
+# once with `true` also installs or builds what the environment needs before the agent starts.
+drop_detected() {
+  FALLBACK="$1"
+  log "env: $1. $DETECTED was detected, not declared, so the job runs without it; .eumaeus.toml makes this an error"
+  PREFIX=(); SHELL_PREFIX=""
+}
+fail_declared() { # fail_declared <error code> <message>
   SETUP_S=$((SECONDS - t0)); ENV_JSON="$(env_json)"
-  if [ "$rc" -ne 0 ]; then log "setup exited $rc after ${SETUP_S}s"; emit failed ",\"error\":\"setup_exit_$rc\""; exit 6; fi
-  log "setup done in ${SETUP_S}s"
+  log "$2 after ${SETUP_S}s"; emit failed ",\"error\":\"$1\""; exit 6
+}
+t0=$SECONDS
+if [ -n "$SETUP" ]; then
+  log "setup: $SETUP"; rc=0
+  bash -c "$SETUP" >&2 || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    [ "$SETUP_FROM" = declared ] && fail_declared "setup_exit_$rc" "setup exited $rc"
+    drop_detected "setup exited $rc"
+  fi
 fi
+if [ ${#PREFIX[@]} -gt 0 ]; then
+  rc=0
+  "${PREFIX[@]}" true >&2 || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    [ "$SHELL_FROM" = declared ] && fail_declared "shell_exit_$rc" "$SHELL_PREFIX true exited $rc"
+    drop_detected "$SHELL_PREFIX true exited $rc"
+  fi
+fi
+SETUP_S=$((SECONDS - t0)); ENV_JSON="$(env_json)"
+log "environment ready in ${SETUP_S}s${FALLBACK:+ (without $DETECTED)}"
 SETUP_OK=1
 
 log "runner=$RUNNER model=${MODEL:-default}"

@@ -265,3 +265,12 @@ What the build changed from the plan:
 - `result.env` has `toml`, `detected`, `setup_s`, `disk` (`golden`, `template`, or `none`), and `promoted`.
 - The image sets `FLOX_DISABLE_METRICS=true` and `DO_NOT_TRACK=1`.
 - Node's `COPYFILE_FICLONE_FORCE` returns `ENOSYS` on macOS, so the dispatcher runs `cp -c`.
+
+After the deploy, a repo whose `mise.toml` asks for `cargo:sqlx-cli` failed every job with `runner_exit_1`:
+`mise exec --` could not install it without cargo, and before M5 the same jobs ran. Two changes followed:
+
+- A detected file is best effort. Its setup runs, then its prefix once with `true`; if either fails, the job
+  runs without the environment and `result.env.fallback` records why. A value from `.eumaeus.toml` still fails
+  the job, with `setup_exit_<n>` or `shell_exit_<n>`.
+- `~/.local/share` is kept next to `~/.cache`. mise installs there, and before this every job re-downloaded its
+  tools.
