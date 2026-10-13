@@ -38,11 +38,11 @@ export class GhCliCredentials implements CredentialSource {
 
   constructor(user: string) {
     this.user = user;
-    this.describe = `gh-cli token for ${user} (personal, broad scope)`;
+    this.describe = `gh-cli token for ${user || 'the active gh account'} (personal, broad scope)`;
   }
 
   async identityFor(): Promise<GitIdentity> {
-    const token = execFileSync('gh', ['auth', 'token', '-u', this.user], { encoding: 'utf8' }).trim();
+    const token = execFileSync('gh', ['auth', 'token', ...(this.user ? ['-u', this.user] : [])], { encoding: 'utf8' }).trim();
     return { token, name: 'eumaeus', email: 'eumaeus@users.noreply.github.com', source: 'gh-cli' };
   }
 }

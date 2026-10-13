@@ -1,131 +1,97 @@
-# eumaeus
+<p align="center"><img src="assets/bot-avatar.png" alt="eumaeus logo, a low-poly boar" width="160"></p>
 
-Self-hosted agent harness. Jobs run one per disposable VM on a Mac (Apple `container`),
-clone a repo, run a coding agent, push a branch.
+<h1 align="center">eumaeus</h1>
 
-Status: M4. A launchd agent runs the dispatcher, which queues jobs, runs up to `EUMAEUS_MAX_CONCURRENT`
-(default 2) VMs at once, and serves MCP tools on `127.0.0.1:7777` behind a bearer token. `tailscale serve`
-publishes that as HTTPS on the tailnet. Jobs push and open PRs as a GitHub App bot with a one-hour token scoped
-to the one repo. Four runners: Claude Code, Codex CLI, Antigravity CLI, pi.
+> “I understand and heed you,” replied Eumaeus; “you need instruct me no further…”
+>
+> …Eumaeus, therefore, took his sandals, bound them to his feet, and started for the town.
+>
+> — Homer, *The Odyssey*, Book XVI, translated by Samuel Butler
 
-## Layout
+Send a coding agent a repo and a task over MCP; get back a pull request. Each job runs in its own throwaway Linux VM on a Mac, so the agent can run with permission prompts off without touching your machine or your GitHub login.
 
-- `src/` dispatcher: Node 24, no build step (type stripping). `db.ts` SQLite queue via `node:sqlite`, `runner.ts` one
-  `container run` per job, `jobs.ts` scheduler, `mcp.ts` the five tools, `http.ts` stateless streamable-HTTP endpoint.
-- `images/job/` job image: Debian bookworm, Node 24, git, gh, ripgrep, jq, Claude Code. Entrypoint is `job.sh`.
-- `scripts/run-job.sh` host wrapper for running one job by hand, no dispatcher needed.
-- `scripts/mcp-smoke.ts` end-to-end check: lists tools, submits a shell job over MCP, polls it to `pushed`.
+Limits:
+
+- Runs on Apple Silicon Macs only. Jobs use Apple's [`container`](https://github.com/apple/container) for VMs.
+- Works with GitHub repos only.
+- Jobs time out after 60 minutes. Restarting the dispatcher marks in-flight jobs `failed`.
+
+## What a job does
+
+1. `submit_job(repo, task)` queues the job in SQLite and returns its id at once.
+2. The dispatcher boots a VM from the job image. At most `EUMAEUS_MAX_CONCURRENT` (default 2) run at a time.
+3. The VM clones the repo, runs the agent on the task, commits, and pushes `job/<id>`.
+4. It opens a PR with the title and body the agent wrote to `/work/pr.md`, using the repo's PR template if it has one.
+5. The VM is deleted. The pushed branch, the PR, and the job log are all that remain.
+
+The VM gets a GitHub App installation token scoped to that one repo and valid for one hour. Agent API keys reach it through a `0600` env file that exists only while the job runs.
+
+## Setup
+
+You need Apple [`container`](https://github.com/apple/container/releases), Node 24, and pnpm. `tailscale` is optional.
+
+1. Put agent keys in `~/.config/eumaeus/secrets.env`, one `KEY=value` per line. [Runners](#runners) lists the key each agent needs.
+2. Run `node scripts/github-app-setup.ts`, open `http://localhost:7778`, and click through GitHub's app creation. Install the app on the repos jobs may push to. This writes `~/.config/eumaeus/github-app.json`.
+3. Run `scripts/setup-mac.sh`. It starts the container system, builds the job image, writes a new `EUMAEUS_AUTH_TOKEN` to `~/.config/eumaeus/dispatcher.env`, and installs a launchd agent. Add `--serve` to publish the endpoint on your tailnet with `tailscale serve`.
+4. Register the server with your MCP client, using the token from `dispatcher.env`:
+
+```sh
+claude mcp add -s user -t http eumaeus http://127.0.0.1:7777/mcp -H "Authorization: Bearer <token>"
+```
+
+`pnpm smoke <owner/repo>` checks the whole path. It opens a real PR, so point it at a scratch repo.
+
+Without a GitHub App, jobs use your `gh` token instead. That token has your full scope and the commits show up as you.
 
 ## MCP tools
 
-`submit_job(repo, task, runner?, model?, base_branch?, branch?, cpus?, memory?)`, `job_status(job_id)`,
-`job_logs(job_id, tail?)` (live: `claude` and `codex` write one `[agent]` line per tool call and message), `cancel_job(job_id)`, `list_jobs(status?, limit?)`, `merge_pr(repo, number, method?, delete_branch?)`.
-Job statuses: `queued`, `running`, `pushed`, `no_changes`, `failed`, `cancelled`.
-
-Pass `branch=` to continue an existing PR: the VM checks that branch out instead of starting a new one, and pushes
-to it. `merge_pr` merges as the bot and refuses while GitHub reports a conflict; a job on the PR branch whose task is
-"merge main and resolve" clears that.
-
-Register with Claude Code once: `claude mcp add -s user -t http eumaeus http://127.0.0.1:7777/mcp`.
+| Tool | What it does |
+|---|---|
+| `submit_job(repo, task, runner?, model?, base_branch?, branch?, cpus?, memory?)` | Queues a job. Pass `branch` to push to an existing PR branch. |
+| `job_status(job_id)` | Returns `queued`, `running`, `pushed`, `no_changes`, `failed`, or `cancelled`, plus the PR URL. |
+| `job_logs(job_id, tail?)` | Tails the log. `claude` and `codex` add one `[agent]` line per tool call as they run. |
+| `cancel_job(job_id)` | Cancels a queued job, or stops a running one and removes its VM. |
+| `list_jobs(status?, limit?)` | Lists recent jobs, newest first. |
+| `merge_pr(repo, number, method?, delete_branch?)` | Merges as the bot. Refuses on a conflict; a job on the PR branch can resolve it. |
 
 ## Runners
 
-| `runner` | CLI in the VM | Needs in `secrets.env` | `model` |
+| `runner` | Agent | Key in `secrets.env` | `model` |
 |---|---|---|---|
-| `claude` | `claude -p --output-format stream-json --verbose --dangerously-skip-permissions` | `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY` | Anthropic model id |
-| `codex` | `codex exec --json --sandbox danger-full-access --ephemeral` | `OPENAI_API_KEY` (or `CODEX_API_KEY`) | OpenAI model id |
-| `antigravity` | `agy -p --output-format json --dangerously-skip-permissions` | `GEMINI_API_KEY` | Gemini model id |
-| `pi` | `pi -p --no-session --no-approve` | any provider key, e.g. `OPENROUTER_API_KEY` | `provider/id` or fuzzy, e.g. `sonnet` |
-| `shell` | `bash -c "$TASK"` | nothing | ignored |
+| `claude` (default) | Claude Code | `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY` | Anthropic model id |
+| `codex` | Codex CLI | `OPENAI_API_KEY` or `CODEX_API_KEY` | OpenAI model id |
+| `antigravity` | Antigravity CLI | `GEMINI_API_KEY` | Gemini model id |
+| `pi` | pi | any provider key, e.g. `OPENROUTER_API_KEY` | `provider/id`, or a name like `sonnet` |
+| `shell` | `bash -c "$TASK"` | none | ignored |
 
-`submit_job` refuses up front when the runner's key is missing from the secrets file, so no VM is spent on it.
-Permission bypass is on for every runner because the VM is disposable and holds only a repo-scoped token.
-Cost is logged for `claude` (dollars) and as token counts for `codex` and `antigravity`; pi's print mode reports none.
+`submit_job` refuses up front when the runner's key is missing. Every PR gets a collapsed block with the job id, runner, model, and cost (`claude` only).
 
-## GitHub App (one time)
+## Configuration
 
-```
-node scripts/github-app-setup.ts    # serves http://localhost:7778; click through GitHub's manifest flow
-```
+The launchd agent reads env vars from `~/.config/eumaeus/dispatcher.env`. Defaults live in `src/config.ts`.
 
-It writes `~/.config/eumaeus/github-app.json` (0600) with the app id, private key, and bot user id, then waits
-for you to install the app. The dispatcher reads that file at startup; without it, jobs fall back to your personal
-`gh` token and commits show up as you.
+| Variable | Default |
+|---|---|
+| `EUMAEUS_HOST`, `EUMAEUS_PORT` | `127.0.0.1`, `7777` |
+| `EUMAEUS_AUTH_TOKEN` | unset, which turns auth off |
+| `EUMAEUS_MAX_CONCURRENT` | `2` |
+| `EUMAEUS_CPUS`, `EUMAEUS_MEMORY` | `4`, `4G` per VM |
+| `EUMAEUS_JOB_TIMEOUT_MIN` | `60` |
+| `EUMAEUS_OPEN_PR` | `1`; `0` pushes the branch only |
+| `EUMAEUS_PR_ASSIGNEE` | `EUMAEUS_GH_USER`; empty assigns nobody |
+| `EUMAEUS_GH_USER` | `gh`'s active account, used without a GitHub App |
+| `EUMAEUS_DATA` | `~/.local/share/eumaeus` |
+| `EUMAEUS_SECRETS` | `~/.config/eumaeus/secrets.env` |
+| `EUMAEUS_GITHUB_APP` | `~/.config/eumaeus/github-app.json` |
+| `EUMAEUS_IMAGE` | `eumaeus-job:dev` |
 
-## Run
+## Development
 
-One-shot on any Mac with `container` installed:
+- `pnpm start` runs the dispatcher in the foreground. Node 24 strips the types; there is no build step.
+- `scripts/service.sh install|status|logs|restart|uninstall` manages the launchd agent. Logs go to `~/Library/Logs/eumaeus/`.
+- `scripts/run-job.sh <owner/repo> "<task>" [runner] [model]` runs one job by hand, without the dispatcher.
+- `images/job/job.sh` is everything that runs inside the VM.
 
-```
-scripts/setup-mac.sh --serve
-```
+## License
 
-It starts the container system, installs deps, builds the job image, writes `~/.config/eumaeus/dispatcher.env`
-with a fresh `EUMAEUS_AUTH_TOKEN`, installs the launchd agent `me.clayharmon.eumaeus`, and publishes
-`https://<host>.<tailnet>.ts.net:7777/mcp` with `tailscale serve`. It prints the `claude mcp add` line to run on
-your laptop. By hand:
-
-```
-container build -t eumaeus-job:dev -f images/job/Dockerfile images/job
-pnpm install
-scripts/service.sh install|status|logs|restart|uninstall    # launchd agent; log in ~/Library/Logs/eumaeus/
-pnpm start            # foreground instead, no auth unless EUMAEUS_AUTH_TOKEN is exported
-pnpm smoke [url]      # submits a shell job and polls it; sends the token from dispatcher.env
-```
-
-## Moving it to the mini
-
-Deployed 2026-10-13 to a Mac mini. The dispatcher there listens on
-`127.0.0.1:7777` and `tailscale serve` exposes that one port as `https://<mini>.<tailnet>.ts.net:7777`.
-Other services on the mini can use 443 or their own ports.
-
-Steps, as run. Everything except step 2 works over ssh from the laptop.
-
-1. Mini: sign in to Tailscale, turn on Remote Login, `ssh-copy-id` the laptop key.
-2. Mini, needs sudo: `installer -pkg container-1.5.0-installer-signed.pkg -target /` and
-   `pmset -a sleep 0 disksleep 0 autorestart 1 womp 1`.
-3. Mini: mise with node 24, `corepack enable pnpm` (the repo pins `pnpm@10.30.2` in `packageManager`).
-4. Clone with the laptop's agent forwarded (`ssh -A`) if the mini's own key is not loaded: the repo is private.
-5. `scp ~/.config/eumaeus/secrets.env ~/.config/eumaeus/github-app.json mini:.config/eumaeus/` and `chmod 600`.
-6. On the mini, `scripts/setup-mac.sh --serve`. 57 s on the first run, image build included.
-7. On the laptop, re-point Claude Code at the mini's URL:
-
-```
-claude mcp remove eumaeus -s user
-claude mcp add -s user -t http eumaeus https://<mini>.<tailnet>.ts.net:7777/mcp -H "Authorization: Bearer <token from the mini's dispatcher.env>"
-```
-
-Limit: FileVault is on, so macOS refuses auto-login. After a reboot the mini waits at the unlock screen and
-neither the `container` service nor the launchd agent runs until someone logs in at the keyboard. Turning
-FileVault off and enabling auto-login removes that wait.
-
-Config is env vars with defaults, see `src/config.ts`: `EUMAEUS_HOST`, `EUMAEUS_PORT`, `EUMAEUS_AUTH_TOKEN`,
-`EUMAEUS_DATA`, `EUMAEUS_IMAGE`, `EUMAEUS_MAX_CONCURRENT`, `EUMAEUS_SECRETS`, `EUMAEUS_GITHUB_APP`, `EUMAEUS_GH_USER`,
-`EUMAEUS_OPEN_PR`, `EUMAEUS_PR_ASSIGNEE` (default: `EUMAEUS_GH_USER`), `EUMAEUS_CPUS`, `EUMAEUS_MEMORY`, `EUMAEUS_JOB_TIMEOUT_MIN`.
-
-Secrets for the agent go in `~/.config/eumaeus/secrets.env` (`ANTHROPIC_API_KEY=...` or
-`CLAUDE_CODE_OAUTH_TOKEN=...`). The file is passed to the VM with `--env-file` and never copied into the image.
-
-## Job image
-
-- `git` clones the repo and commits the job's work.
-- `gh` opens pull requests and talks to the GitHub API.
-- `ripgrep` (`rg`) searches code quickly.
-- `jq` parses and filters JSON.
-
-## Limits
-
-- Each job gets a GitHub App installation token scoped to its repo, valid one hour. The app is installed on
-  all repos of the account; narrow that on the app's settings page if you want.
-- Secrets reach the VM through a `0600` env file that exists only while the job runs. The task text is on argv.
-- Agent runners get a trailer on the task asking for the PR title and body in `/work/pr.md`, filling the repo's
-  PR template (`.github/`, `docs/`, or root `pull_request_template.md`, any case) when one exists. The PR is opened
-  from that file and assigned to `EUMAEUS_PR_ASSIGNEE`. If the agent opened a PR itself during the run, that PR is
-  reused and only the assignee is added. Without the file, the body is the task plus the agent's summary.
-- A collapsed "eumaeus run" block on every PR carries the job id, runner, requested model, the model actually used
-  (`claude` only, from `modelUsage`; Sonnet 5.5 when `model` is left empty), cost, turns, and the task.
-- Antigravity in the VM uses the Gemini API key provider only (no Google account login inside a VM).
-- `/mcp` requires the bearer token from `dispatcher.env`; `/healthz` is open. The dispatcher binds to localhost
-  only; the tailnet sees it through `tailscale serve`, which is tailnet-only (no Funnel).
-- The smoke test opens a real PR on the target repo each run. Close it or point the smoke at a scratch repo.
-- Jobs time out after 60 minutes. A dispatcher restart marks in-flight jobs `failed` and removes their VMs.
+MIT

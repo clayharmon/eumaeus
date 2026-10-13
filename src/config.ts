@@ -16,12 +16,12 @@ export const config = {
   secretsFile: resolve(home(env('EUMAEUS_SECRETS', '~/.config/eumaeus/secrets.env'))),
   /** Written by scripts/github-app-setup.ts. When present, jobs push and open PRs as the app's bot. */
   githubAppFile: resolve(home(env('EUMAEUS_GITHUB_APP', '~/.config/eumaeus/github-app.json'))),
-  /** Fallback when no GitHub App is configured: GH_TOKEN from `gh auth token -u <user>`. */
-  ghUser: env('EUMAEUS_GH_USER', 'clayharmon'),
+  /** Fallback when no GitHub App is configured: GH_TOKEN from `gh auth token [-u <user>]`. Empty = gh's active account. */
+  ghUser: env('EUMAEUS_GH_USER', ''),
   /** Open a pull request after a successful push. */
   openPr: env('EUMAEUS_OPEN_PR', '1') !== '0',
   /** GitHub login assigned to every PR the bot opens. Empty = nobody. Defaults to EUMAEUS_GH_USER. */
-  prAssignee: env('EUMAEUS_PR_ASSIGNEE', env('EUMAEUS_GH_USER', 'clayharmon')),
+  prAssignee: env('EUMAEUS_PR_ASSIGNEE', env('EUMAEUS_GH_USER', '')),
   cpus: Number(env('EUMAEUS_CPUS', '4')),
   memory: env('EUMAEUS_MEMORY', '4G'),
   jobTimeoutMs: Number(env('EUMAEUS_JOB_TIMEOUT_MIN', '60')) * 60_000,

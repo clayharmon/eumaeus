@@ -1,13 +1,17 @@
 // End-to-end check against a running dispatcher: list tools, submit a shell job, poll to completion.
-// Usage: node scripts/mcp-smoke.ts [url] [owner/repo]
+// Usage: node scripts/mcp-smoke.ts <owner/repo> [url]. Opens a real PR on <owner/repo>; use a scratch repo.
 // SMOKE_RUNNER / SMOKE_TASK override the shell job. Sends `Authorization: Bearer $EUMAEUS_AUTH_TOKEN`, read from the env or ~/.config/eumaeus/dispatcher.env.
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 
-const url = process.argv[2] ?? 'http://127.0.0.1:7777/mcp';
-const repo = process.argv[3] ?? 'clayharmon/eumaeus';
+const repo = process.argv[2];
+const url = process.argv[3] ?? 'http://127.0.0.1:7777/mcp';
+if (!repo) {
+  console.error('usage: node scripts/mcp-smoke.ts <owner/repo> [url]');
+  process.exit(2);
+}
 
 function authToken(): string | undefined {
   if (process.env['EUMAEUS_AUTH_TOKEN']) return process.env['EUMAEUS_AUTH_TOKEN'];
@@ -33,7 +37,7 @@ const submitted = JSON.parse(firstText(await client.callTool({
   arguments: {
     repo,
     runner: process.env['SMOKE_RUNNER'] ?? 'shell',
-    task: process.env['SMOKE_TASK'] ?? 'mkdir -p jobs && printf "# m1 smoke\\n\\nsubmitted over MCP at %s\\n" "$(date -u +%FT%TZ)" > jobs/m1-smoke.md',
+    task: process.env['SMOKE_TASK'] ?? 'mkdir -p jobs && printf "# eumaeus smoke\\n\\nsubmitted over MCP at %s\\n" "$(date -u +%FT%TZ)" > jobs/smoke.md',
   },
 }))) as { id: string; status: string; branch: string };
 console.log('submitted:', submitted.id, submitted.status, submitted.branch);

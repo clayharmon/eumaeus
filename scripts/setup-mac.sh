@@ -34,7 +34,7 @@ container builder stop >/dev/null 2>&1 || true
 
 step "secrets"
 for f in secrets.env github-app.json; do
-  if [ -f "$HOME/.config/eumaeus/$f" ]; then echo "ok   ~/.config/eumaeus/$f"; else echo "MISSING ~/.config/eumaeus/$f  (copy it from the machine that has it)"; fi
+  if [ -f "$HOME/.config/eumaeus/$f" ]; then echo "ok   ~/.config/eumaeus/$f"; else echo "MISSING ~/.config/eumaeus/$f  (see Setup in README.md)"; fi
 done
 
 step "service"

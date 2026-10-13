@@ -4,7 +4,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-LABEL="me.clayharmon.eumaeus"
+LABEL="local.eumaeus.dispatcher"
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
 LOG_DIR="$HOME/Library/Logs/eumaeus"
 CONF_DIR="$HOME/.config/eumaeus"
