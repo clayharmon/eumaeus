@@ -3,8 +3,9 @@
 Self-hosted agent harness. Jobs run one per disposable VM on a Mac (Apple `container`),
 clone a repo, run a coding agent, push a branch.
 
-Status: M1. A dispatcher queues jobs, runs up to `EUMAEUS_MAX_CONCURRENT` (default 2) VMs at once, and exposes
-MCP tools over HTTP on `127.0.0.1:7777`. No GitHub App yet, no tailnet bind, not a launchd service yet.
+Status: M2. A dispatcher queues jobs, runs up to `EUMAEUS_MAX_CONCURRENT` (default 2) VMs at once, and exposes
+MCP tools over HTTP on `127.0.0.1:7777`. Jobs push and open PRs as a GitHub App bot with a one-hour token scoped
+to the one repo. No tailnet bind yet, not a launchd service yet.
 
 ## Layout
 
@@ -21,6 +22,16 @@ MCP tools over HTTP on `127.0.0.1:7777`. No GitHub App yet, no tailnet bind, not
 
 Register with Claude Code once: `claude mcp add -s user -t http eumaeus http://127.0.0.1:7777/mcp`.
 
+## GitHub App (one time)
+
+```
+node scripts/github-app-setup.ts    # serves http://localhost:7778; click through GitHub's manifest flow
+```
+
+It writes `~/.config/eumaeus/github-app.json` (0600) with the app id, private key, and bot user id, then waits
+for you to install the app. The dispatcher reads that file at startup; without it, jobs fall back to your personal
+`gh` token and commits show up as you.
+
 ## Run
 
 ```
@@ -31,8 +42,8 @@ pnpm smoke            # needs the dispatcher running
 ```
 
 Config is env vars with defaults, see `src/config.ts`: `EUMAEUS_HOST`, `EUMAEUS_PORT`, `EUMAEUS_AUTH_TOKEN`,
-`EUMAEUS_DATA`, `EUMAEUS_IMAGE`, `EUMAEUS_MAX_CONCURRENT`, `EUMAEUS_SECRETS`, `EUMAEUS_GH_USER`, `EUMAEUS_CPUS`,
-`EUMAEUS_MEMORY`, `EUMAEUS_JOB_TIMEOUT_MIN`.
+`EUMAEUS_DATA`, `EUMAEUS_IMAGE`, `EUMAEUS_MAX_CONCURRENT`, `EUMAEUS_SECRETS`, `EUMAEUS_GITHUB_APP`, `EUMAEUS_GH_USER`,
+`EUMAEUS_OPEN_PR`, `EUMAEUS_CPUS`, `EUMAEUS_MEMORY`, `EUMAEUS_JOB_TIMEOUT_MIN`.
 
 Secrets for the agent go in `~/.config/eumaeus/secrets.env` (`ANTHROPIC_API_KEY=...` or
 `CLAUDE_CODE_OAUTH_TOKEN=...`). The file is passed to the VM with `--env-file` and never copied into the image.
@@ -44,10 +55,12 @@ Secrets for the agent go in `~/.config/eumaeus/secrets.env` (`ANTHROPIC_API_KEY=
 - `ripgrep` (`rg`) searches code quickly.
 - `jq` parses and filters JSON.
 
-## Limits in M1
+## Limits
 
-- GitHub auth is your personal `gh` token, fetched per job. M2 replaces it with a GitHub App installation token.
+- Each job gets a GitHub App installation token scoped to its repo, valid one hour. The app is installed on
+  all repos of the account; narrow that on the app's settings page if you want.
 - Secrets reach the VM through a `0600` env file that exists only while the job runs. The task text is on argv.
+- The PR body carries the task, the agent's own summary, runner, model, cost, and turn count.
 - Runner `claude` only (`shell` for testing). `codex`, `antigravity`, `pi` arrive in M3.
 - `/mcp` has no auth unless `EUMAEUS_AUTH_TOKEN` is set, so it binds to localhost. M4 adds the tailnet.
 - Jobs time out after 60 minutes. A dispatcher restart marks in-flight jobs `failed` and removes their VMs.
