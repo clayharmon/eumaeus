@@ -21,7 +21,13 @@ running() { curl -fsS "$HEALTH" 2>/dev/null | grep -o '"running":[0-9]*' | cut -
 
 if [ "${1:-}" != "--no-pull" ]; then
   step "pull"
+  before="$(git rev-parse HEAD:scripts/update.sh)"
   git pull --ff-only
+  # bash keeps running the copy it opened, so a pull that changes this script would run the old steps.
+  if [ "$(git rev-parse HEAD:scripts/update.sh)" != "$before" ]; then
+    echo "scripts/update.sh changed; running the new one"
+    exec "$ROOT/scripts/update.sh" --no-pull
+  fi
 fi
 
 step "dependencies"
