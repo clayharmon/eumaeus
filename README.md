@@ -3,10 +3,10 @@
 Self-hosted agent harness. Jobs run one per disposable VM on a Mac (Apple `container`),
 clone a repo, run a coding agent, push a branch.
 
-Status: M3. A dispatcher queues jobs, runs up to `EUMAEUS_MAX_CONCURRENT` (default 2) VMs at once, and exposes
-MCP tools over HTTP on `127.0.0.1:7777`. Jobs push and open PRs as a GitHub App bot with a one-hour token scoped
-to the one repo. Four runners: Claude Code, Codex CLI, Antigravity CLI, pi. No tailnet bind yet, not a launchd
-service yet.
+Status: M4. A launchd agent runs the dispatcher, which queues jobs, runs up to `EUMAEUS_MAX_CONCURRENT`
+(default 2) VMs at once, and serves MCP tools on `127.0.0.1:7777` behind a bearer token. `tailscale serve`
+publishes that as HTTPS on the tailnet. Jobs push and open PRs as a GitHub App bot with a one-hour token scoped
+to the one repo. Four runners: Claude Code, Codex CLI, Antigravity CLI, pi.
 
 ## Layout
 
@@ -54,11 +54,35 @@ for you to install the app. The dispatcher reads that file at startup; without i
 
 ## Run
 
+One-shot on any Mac with `container` installed:
+
+```
+scripts/setup-mac.sh --serve
+```
+
+It starts the container system, installs deps, builds the job image, writes `~/.config/eumaeus/dispatcher.env`
+with a fresh `EUMAEUS_AUTH_TOKEN`, installs the launchd agent `me.clayharmon.eumaeus`, and publishes
+`https://<host>.<tailnet>.ts.net:7777/mcp` with `tailscale serve`. It prints the `claude mcp add` line to run on
+your laptop. By hand:
+
 ```
 container build -t eumaeus-job:dev -f images/job/Dockerfile images/job
 pnpm install
-pnpm start            # dispatcher on 127.0.0.1:7777; data in ~/.local/share/eumaeus
-pnpm smoke            # needs the dispatcher running
+scripts/service.sh install|status|logs|restart|uninstall    # launchd agent; log in ~/Library/Logs/eumaeus/
+pnpm start            # foreground instead, no auth unless EUMAEUS_AUTH_TOKEN is exported
+pnpm smoke [url]      # submits a shell job and polls it; sends the token from dispatcher.env
+```
+
+## Moving it to the mini
+
+On the mini: sign in to Tailscale, install the `container` pkg, `sudo pmset -a sleep 0 disksleep 0`, enable
+auto-login (the `container` service and the launchd agent are per-user and need a logged-in session), install
+mise + node 24 + pnpm, clone this repo. Copy `~/.config/eumaeus/secrets.env` and `github-app.json` from the
+laptop. Run `scripts/setup-mac.sh --serve`, then on the laptop re-point Claude Code at the mini's URL:
+
+```
+claude mcp remove eumaeus -s user
+claude mcp add -s user -t http eumaeus https://<mini>.<tailnet>.ts.net:7777/mcp -H "Authorization: Bearer <token from the mini's dispatcher.env>"
 ```
 
 Config is env vars with defaults, see `src/config.ts`: `EUMAEUS_HOST`, `EUMAEUS_PORT`, `EUMAEUS_AUTH_TOKEN`,
@@ -82,5 +106,7 @@ Secrets for the agent go in `~/.config/eumaeus/secrets.env` (`ANTHROPIC_API_KEY=
 - Secrets reach the VM through a `0600` env file that exists only while the job runs. The task text is on argv.
 - The PR body carries the task, the agent's own summary, runner, model, cost, and turn count.
 - Antigravity in the VM uses the Gemini API key provider only (no Google account login inside a VM).
-- `/mcp` has no auth unless `EUMAEUS_AUTH_TOKEN` is set, so it binds to localhost. M4 adds the tailnet.
+- `/mcp` requires the bearer token from `dispatcher.env`; `/healthz` is open. The dispatcher binds to localhost
+  only; the tailnet sees it through `tailscale serve`, which is tailnet-only (no Funnel).
+- The smoke test opens a real PR on the target repo each run. Close it or point the smoke at a scratch repo.
 - Jobs time out after 60 minutes. A dispatcher restart marks in-flight jobs `failed` and removes their VMs.
