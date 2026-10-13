@@ -2,7 +2,10 @@
 # Runs inside the job VM. Clone, run the agent, commit, push one branch.
 # Required env: JOB_ID, REPO (owner/name), TASK, GH_TOKEN.
 # Optional env: BASE_BRANCH (main), BRANCH (job/$JOB_ID), RUNNER (claude|codex|antigravity|pi|shell), MODEL,
-#   GIT_AUTHOR_NAME/GIT_AUTHOR_EMAIL (commit identity), OPEN_PR (1 = open a pull request after push).
+#   GIT_AUTHOR_NAME/GIT_AUTHOR_EMAIL (commit identity), OPEN_PR (1 = open a pull request after push),
+#   PR_ASSIGNEE (GitHub login to assign the PR to).
+# Agent runners are asked to write the PR title and body to /work/pr.md (filling the repo's PR template if
+# there is one). The PR is opened from that file; without it the body is the task plus the agent's summary.
 # Runner credentials: claude ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN; codex OPENAI_API_KEY or CODEX_API_KEY;
 #   antigravity GEMINI_API_KEY; pi any provider key, e.g. ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY, OPENROUTER_API_KEY.
 # stdout: one JSON line with the outcome. stderr: progress.
@@ -91,7 +94,7 @@ run_agent() {
       local args=(-p --output-format stream-json --verbose --dangerously-skip-permissions)
       [ -n "$MODEL" ] && args+=(--model "$MODEL")
       local rc=0
-      claude "${args[@]}" "$TASK" | tee /work/runner.jsonl | narrate_claude || rc=${PIPESTATUS[0]}
+      claude "${args[@]}" "$AGENT_TASK" | tee /work/runner.jsonl | narrate_claude || rc=${PIPESTATUS[0]}
       [ "$rc" -eq 0 ] || return "$rc"
       jq -c 'select(.type == "result")' /work/runner.jsonl | tail -n 1 > /work/runner.json
       [ -s /work/runner.json ] || { log "claude exited 0 without a result event"; return 5; }
@@ -104,7 +107,7 @@ run_agent() {
       local args=(exec --json --sandbox danger-full-access --skip-git-repo-check --ephemeral -o /work/codex-last.md)
       [ -n "$MODEL" ] && args+=(-m "$MODEL")
       local rc=0
-      codex "${args[@]}" "$TASK" | tee /work/runner.jsonl | narrate_codex || rc=${PIPESTATUS[0]}
+      codex "${args[@]}" "$AGENT_TASK" | tee /work/runner.jsonl | narrate_codex || rc=${PIPESTATUS[0]}
       [ "$rc" -eq 0 ] || return "$rc"
       AGENT_SUMMARY="$(head -c 4000 /work/codex-last.md 2>/dev/null || true)"
       COST_LINE="$(jq -r 'select(.type=="turn.completed") | .usage | "tokens in=\(.input_tokens) cached=\(.cached_input_tokens // 0) out=\(.output_tokens)"' /work/runner.jsonl | tail -1)"
@@ -113,7 +116,7 @@ run_agent() {
       need no_gemini_credentials GEMINI_API_KEY
       local args=(-p --output-format json --dangerously-skip-permissions)
       [ -n "$MODEL" ] && args+=(--model "$MODEL")
-      agy "${args[@]}" "$TASK" > /work/runner.json || return $?
+      agy "${args[@]}" "$AGENT_TASK" > /work/runner.json || return $?
       [ "$(jq -r '.status // ""' /work/runner.json)" = "SUCCESS" ] || { log "agy status: $(jq -c '{status, error}' /work/runner.json)"; return 5; }
       AGENT_SUMMARY="$(jq -r '.response // ""' /work/runner.json | head -c 4000)"
       COST_LINE="tokens in=$(jq -r '.usage.input_tokens // "?"' /work/runner.json) out=$(jq -r '.usage.output_tokens // "?"' /work/runner.json) turns=$(jq -r '.num_turns // "?"' /work/runner.json)"
@@ -122,7 +125,7 @@ run_agent() {
       need no_provider_credentials ANTHROPIC_API_KEY OPENAI_API_KEY GEMINI_API_KEY OPENROUTER_API_KEY XAI_API_KEY GROQ_API_KEY MISTRAL_API_KEY
       local args=(-p --no-session --no-approve)
       [ -n "$MODEL" ] && args+=(--model "$MODEL")
-      pi "${args[@]}" "$TASK" > /work/runner.txt || return $?
+      pi "${args[@]}" "$AGENT_TASK" > /work/runner.txt || return $?
       AGENT_SUMMARY="$(tail -c 4000 /work/runner.txt)"
       COST_LINE="usage not reported by pi print mode"
       ;;
@@ -134,6 +137,19 @@ run_agent() {
       ;;
   esac
 }
+
+# Ask agent runners for the PR description. Never for `shell`, whose TASK is a command line.
+PR_FILE=/work/pr.md
+AGENT_TASK="$TASK"
+if [ "$RUNNER" != shell ]; then
+  # `|| true`: find exits 1 when .github or docs is missing, and set -e would end the job here.
+  PR_TEMPLATE="$(find . .github docs -maxdepth 1 -iname 'pull_request_template.md' 2>/dev/null | head -n1 | sed 's#^\./##' || true)"
+  handoff="When the work is done, write the pull request description to $PR_FILE: line 1 is the PR title (72 characters max), then a blank line, then the body in Markdown."
+  [ -n "$PR_TEMPLATE" ] && handoff="$handoff The repository's PR template is at $PR_TEMPLATE; fill it in."
+  handoff="$handoff $PR_FILE is outside the repository, so it is not committed. The harness pushes the branch and opens the pull request from that file unless one is already open."
+  AGENT_TASK="$TASK"$'\n\n'"---"$'\n'"Hand-off from the eumaeus harness, not from the requester: $handoff"
+  log "pr description requested at $PR_FILE${PR_TEMPLATE:+ (template: $PR_TEMPLATE)}"
+fi
 
 if ! run_agent; then
   rc=$?
@@ -158,17 +174,37 @@ git push -q -u origin "$BRANCH"
 log "pushed $BRANCH ($NEW_COMMITS new commit(s))"
 
 PR_URL=""
+assign=(); [ -n "${PR_ASSIGNEE:-}" ] && assign=(--assignee "$PR_ASSIGNEE")
 if [ "$OPEN_PR" = "1" ] && PR_URL="$(gh pr view "$BRANCH" --repo "$REPO" --json url -q .url 2>/dev/null)" && [ -n "$PR_URL" ]; then
   log "pr already open: $PR_URL"
+  [ ${#assign[@]} -gt 0 ] && { gh pr edit "$PR_URL" --add-assignee "$PR_ASSIGNEE" >/dev/null 2>/tmp/pr.err || log "assign failed: $(cat /tmp/pr.err)"; }
 elif [ "$OPEN_PR" = "1" ]; then
-  title="$(printf '%s' "$TASK" | head -n1 | cut -c1-72)"
-  # shellcheck disable=SC2016  # backticks are literal markdown
-  body="$(printf '%s\n\n## Task\n\n%s\n\n## Agent summary\n\n%s\n\n## Run\n\n- job: `%s`\n- runner: %s\n- model: %s\n- %s\n' \
-    "Opened by eumaeus. Review before merging." "$TASK" "${AGENT_SUMMARY:-_(none)_}" "$JOB_ID" "$RUNNER" "${MODEL:-default}" "${COST_LINE:-no cost data}")"
-  if PR_URL="$(gh pr create --repo "$REPO" --base "$BASE_BRANCH" --head "$BRANCH" --title "$title" --body "$body" 2>/tmp/pr.err)"; then
-    log "pr $PR_URL"
+  title=""; body=""
+  if [ -s "$PR_FILE" ]; then
+    title="$(head -n1 "$PR_FILE" | sed 's/^#* *//' | cut -c1-72)"
+    body="$(tail -n +2 "$PR_FILE" | sed '1{/^$/d;}')"
+    log "pr description from agent ($(wc -l < "$PR_FILE" | tr -d ' ') lines)"
+  fi
+  [ -n "$title" ] || title="$(printf '%s' "$TASK" | head -n1 | cut -c1-72)"
+  if [ -n "$body" ]; then
+    # shellcheck disable=SC2016  # backticks are literal markdown
+    run="$(printf '\n\n<details><summary>eumaeus run</summary>\n\n- job: `%s`\n- runner: %s\n- requested model: %s\n- %s\n\n<details><summary>Task</summary>\n\n%s\n\n</details>\n</details>\n' \
+      "$JOB_ID" "$RUNNER" "${MODEL:-default}" "${COST_LINE:-no cost data}" "$TASK")"
   else
-    log "pr create failed: $(cat /tmp/pr.err)"; PR_URL=""
+    # shellcheck disable=SC2016
+    body="$(printf '%s\n\n## Task\n\n%s\n\n## Agent summary\n\n%s' \
+      "Opened by eumaeus. Review before merging." "$TASK" "${AGENT_SUMMARY:-_(none)_}")"
+    # shellcheck disable=SC2016
+    run="$(printf '\n\n## Run\n\n- job: `%s`\n- runner: %s\n- requested model: %s\n- %s\n' "$JOB_ID" "$RUNNER" "${MODEL:-default}" "${COST_LINE:-no cost data}")"
+  fi
+  body="$body$run"
+  if PR_URL="$(gh pr create --repo "$REPO" --base "$BASE_BRANCH" --head "$BRANCH" --title "$title" --body "$body" "${assign[@]}" 2>/tmp/pr.err)"; then
+    log "pr $PR_URL${PR_ASSIGNEE:+ (assigned to $PR_ASSIGNEE)}"
+  elif [ ${#assign[@]} -gt 0 ] && ! gh pr view "$BRANCH" --repo "$REPO" --json url -q .url >/dev/null 2>&1 \
+       && PR_URL="$(gh pr create --repo "$REPO" --base "$BASE_BRANCH" --head "$BRANCH" --title "$title" --body "$body" 2>/tmp/pr2.err)"; then
+    log "pr $PR_URL (assign to $PR_ASSIGNEE failed: $(head -c 300 /tmp/pr.err))"
+  else
+    log "pr create failed: $(cat /tmp/pr.err /tmp/pr2.err 2>/dev/null | head -c 600)"; PR_URL=""
   fi
 fi
 

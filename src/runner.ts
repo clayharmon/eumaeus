@@ -72,7 +72,7 @@ export class JobProcess {
       '-e', `JOB_ID=${j.id}`, '-e', `REPO=${j.repo}`, '-e', `TASK=${j.task}`,
       '-e', `RUNNER=${j.runner}`, '-e', `MODEL=${j.model ?? ''}`,
       '-e', `BASE_BRANCH=${j.base_branch}`, '-e', `BRANCH=${j.branch}`,
-      '-e', `OPEN_PR=${this.cfg.openPr ? '1' : '0'}`,
+      '-e', `OPEN_PR=${this.cfg.openPr ? '1' : '0'}`, '-e', `PR_ASSIGNEE=${this.cfg.prAssignee}`,
       '--env-file', this.envPath,
       this.cfg.image,
     ];

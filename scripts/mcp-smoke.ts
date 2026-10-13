@@ -1,6 +1,6 @@
 // End-to-end check against a running dispatcher: list tools, submit a shell job, poll to completion.
 // Usage: node scripts/mcp-smoke.ts [url] [owner/repo]
-// Sends `Authorization: Bearer $EUMAEUS_AUTH_TOKEN`, read from the env or ~/.config/eumaeus/dispatcher.env.
+// SMOKE_RUNNER / SMOKE_TASK override the shell job. Sends `Authorization: Bearer $EUMAEUS_AUTH_TOKEN`, read from the env or ~/.config/eumaeus/dispatcher.env.
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -32,8 +32,8 @@ const submitted = JSON.parse(firstText(await client.callTool({
   name: 'submit_job',
   arguments: {
     repo,
-    runner: 'shell',
-    task: 'mkdir -p jobs && printf "# m1 smoke\\n\\nsubmitted over MCP at %s\\n" "$(date -u +%FT%TZ)" > jobs/m1-smoke.md',
+    runner: process.env['SMOKE_RUNNER'] ?? 'shell',
+    task: process.env['SMOKE_TASK'] ?? 'mkdir -p jobs && printf "# m1 smoke\\n\\nsubmitted over MCP at %s\\n" "$(date -u +%FT%TZ)" > jobs/m1-smoke.md',
   },
 }))) as { id: string; status: string; branch: string };
 console.log('submitted:', submitted.id, submitted.status, submitted.branch);

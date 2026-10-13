@@ -20,6 +20,8 @@ export const config = {
   ghUser: env('EUMAEUS_GH_USER', 'clayharmon'),
   /** Open a pull request after a successful push. */
   openPr: env('EUMAEUS_OPEN_PR', '1') !== '0',
+  /** GitHub login assigned to every PR the bot opens. Empty = nobody. Defaults to EUMAEUS_GH_USER. */
+  prAssignee: env('EUMAEUS_PR_ASSIGNEE', env('EUMAEUS_GH_USER', 'clayharmon')),
   cpus: Number(env('EUMAEUS_CPUS', '4')),
   memory: env('EUMAEUS_MEMORY', '4G'),
   jobTimeoutMs: Number(env('EUMAEUS_JOB_TIMEOUT_MIN', '60')) * 60_000,

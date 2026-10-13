@@ -101,7 +101,7 @@ FileVault off and enabling auto-login removes that wait.
 
 Config is env vars with defaults, see `src/config.ts`: `EUMAEUS_HOST`, `EUMAEUS_PORT`, `EUMAEUS_AUTH_TOKEN`,
 `EUMAEUS_DATA`, `EUMAEUS_IMAGE`, `EUMAEUS_MAX_CONCURRENT`, `EUMAEUS_SECRETS`, `EUMAEUS_GITHUB_APP`, `EUMAEUS_GH_USER`,
-`EUMAEUS_OPEN_PR`, `EUMAEUS_CPUS`, `EUMAEUS_MEMORY`, `EUMAEUS_JOB_TIMEOUT_MIN`.
+`EUMAEUS_OPEN_PR`, `EUMAEUS_PR_ASSIGNEE` (default: `EUMAEUS_GH_USER`), `EUMAEUS_CPUS`, `EUMAEUS_MEMORY`, `EUMAEUS_JOB_TIMEOUT_MIN`.
 
 Secrets for the agent go in `~/.config/eumaeus/secrets.env` (`ANTHROPIC_API_KEY=...` or
 `CLAUDE_CODE_OAUTH_TOKEN=...`). The file is passed to the VM with `--env-file` and never copied into the image.
@@ -118,7 +118,12 @@ Secrets for the agent go in `~/.config/eumaeus/secrets.env` (`ANTHROPIC_API_KEY=
 - Each job gets a GitHub App installation token scoped to its repo, valid one hour. The app is installed on
   all repos of the account; narrow that on the app's settings page if you want.
 - Secrets reach the VM through a `0600` env file that exists only while the job runs. The task text is on argv.
-- The PR body carries the task, the agent's own summary, runner, cost, and turn count. For `claude` it names the model actually used (`modelUsage`), which is Sonnet 5.5 when `model` is left empty.
+- Agent runners get a trailer on the task asking for the PR title and body in `/work/pr.md`, filling the repo's
+  PR template (`.github/`, `docs/`, or root `pull_request_template.md`, any case) when one exists. The PR is opened
+  from that file and assigned to `EUMAEUS_PR_ASSIGNEE`. If the agent opened a PR itself during the run, that PR is
+  reused and only the assignee is added. Without the file, the body is the task plus the agent's summary.
+- A collapsed "eumaeus run" block on every PR carries the job id, runner, requested model, the model actually used
+  (`claude` only, from `modelUsage`; Sonnet 5.5 when `model` is left empty), cost, turns, and the task.
 - Antigravity in the VM uses the Gemini API key provider only (no Google account login inside a VM).
 - `/mcp` requires the bearer token from `dispatcher.env`; `/healthz` is open. The dispatcher binds to localhost
   only; the tailnet sees it through `tailscale serve`, which is tailnet-only (no Funnel).
