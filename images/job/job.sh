@@ -76,9 +76,9 @@ SETUP="${SETUP-$D_SETUP}"
 SHELL_PREFIX="${SHELL_PREFIX-$D_SHELL}"
 read -ra PREFIX <<< "$SHELL_PREFIX"
 env_json() {
+  # The dispatcher adds where the disk came from and whether it was promoted.
   jq -cn --argjson toml "$([ "${EUMAEUS_TOML:-}" = 1 ] && echo true || echo false)" --arg detected "$DETECTED" \
-    --argjson disk "$([ -n "$DISK" ] && echo true || echo false)" --argjson setup_s "${SETUP_S:-null}" \
-    '{toml: $toml, detected: $detected, disk: $disk, setup_s: $setup_s}'
+    --argjson setup_s "${SETUP_S:-null}" '{toml: $toml, detected: $detected, setup_s: $setup_s}'
 }
 ENV_JSON="$(env_json)"
 log "env: ${EUMAEUS_TOML:+.eumaeus.toml, }detected $DETECTED, disk $([ -n "$DISK" ] && echo yes || echo no); setup: ${SETUP:-none}; shell: ${SHELL_PREFIX:-none}"

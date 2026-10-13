@@ -88,7 +88,15 @@ export class Scheduler {
     // The VM must be gone before its volume is cloned or removed. The disk is settled before the job reads as
     // finished, so a job submitted the moment this one finishes clones the promoted disk.
     await removeVm(job.id);
-    await this.settleDisk(job, proc, out);
+    const promoted = await this.settleDisk(job, proc, out);
+    if (out.result && proc.disk) {
+      const env = out.result['env'];
+      out.result['env'] = {
+        ...(typeof env === 'object' && env !== null ? env : {}),
+        disk: proc.disk.volume !== null ? proc.disk.source : 'none',
+        promoted,
+      };
+    }
     const current = this.db.get(job.id);
     // cancel() and the timeout write their own terminal status first; don't overwrite it.
     if (current && !TERMINAL.has(current.status)) {
@@ -100,15 +108,17 @@ export class Scheduler {
   }
 
   /** Promote the job's disk when its setup worked and nothing killed it; always remove the volume. Never throws. */
-  private async settleDisk(job: JobRow, proc: JobProcess, out: RunOutcome): Promise<void> {
+  private async settleDisk(job: JobRow, proc: JobProcess, out: RunOutcome): Promise<boolean> {
     const volume = proc.disk?.volume;
-    if (!volume) return;
+    if (!volume) return false;
+    let promoted = false;
     let note: string;
     if (this.killed.has(job.id)) note = 'discarded: the job was cancelled, timed out, or shut down';
     else if (out.result?.['setup_ok'] !== true) note = 'discarded: setup did not finish';
     else {
       try {
         await this.disks.promote(volume, job.repo);
+        promoted = true;
         note = `promoted to ${this.disks.golden(job.repo)}`;
       } catch (e) {
         note = `promote failed: ${e instanceof Error ? e.message : String(e)}`;
@@ -118,6 +128,7 @@ export class Scheduler {
     try {
       appendFileSync(this.logPath(job.id), `[dispatcher] ${new Date().toISOString()} disk ${note}\n`);
     } catch { /* the log is best effort */ }
+    return promoted;
   }
 
   async cancel(id: string): Promise<JobRow | undefined> {

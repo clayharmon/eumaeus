@@ -122,6 +122,18 @@ export function buildMcpServer(sched: Scheduler, db: Db, creds: CredentialSource
   );
 
   server.registerTool(
+    'reset_cache',
+    {
+      title: "Reset a repo's disk",
+      description:
+        "Delete the repo's golden disk, the cached /nix (Nix store, tools, cache paths) its jobs start from. The next job " +
+        "starts from the template and rebuilds what it needs. A job already running on the repo still promotes its disk when it finishes.",
+      inputSchema: { repo: z.string().regex(/^[\w.-]+\/[\w.-]+$/).describe('GitHub repo as owner/name') },
+    },
+    async ({ repo }) => text({ repo, deleted: sched.disks.reset(repo) }),
+  );
+
+  server.registerTool(
     'list_jobs',
     {
       title: 'List jobs',

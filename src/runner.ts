@@ -2,9 +2,10 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { createWriteStream, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync, type WriteStream } from 'node:fs';
 import { dirname } from 'node:path';
 import type { Config } from './config.ts';
-import type { CredentialSource } from './credentials.ts';
+import type { CredentialSource, GitIdentity } from './credentials.ts';
 import type { JobRow } from './db.ts';
 import type { Disks, PreparedDisk } from './disks.ts';
+import { envArgs, readEnvToml, type EnvToml } from './envfile.ts';
 
 export interface RunOutcome {
   exitCode: number | null;
@@ -65,13 +66,28 @@ export class JobProcess {
     const log = createWriteStream(this.logPath, { flags: 'a' });
     log.write(`[dispatcher] ${new Date().toISOString()} start ${this.name} repo=${j.repo} runner=${j.runner} cpus=${j.cpus} mem=${j.memory}\n`);
 
+    let token: string;
     try {
-      const source = await this.writeEnvFile();
-      log.write(`[dispatcher] credentials: ${source}\n`);
+      const id = await this.writeEnvFile();
+      token = id.token;
+      log.write(`[dispatcher] credentials: ${id.source} as ${id.name}\n`);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       log.write(`[dispatcher] credential error: ${msg}\n`);
       log.end();
+      return { exitCode: null, signal: null, result: { status: 'failed', error: msg } };
+    }
+    // A job on its own new branch reads the base; one continuing a branch reads that branch, then the base.
+    const refs = j.branch === `job/${j.id}` ? [j.base_branch] : [j.branch, j.base_branch];
+    let toml: EnvToml | null;
+    try {
+      toml = await readEnvToml(j.repo, refs, token);
+      log.write(`[dispatcher] .eumaeus.toml: ${toml ? JSON.stringify(toml) : 'none'}\n`);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      log.write(`[dispatcher] ${msg}\n`);
+      log.end();
+      rmSync(this.envPath, { force: true });
       return { exitCode: null, signal: null, result: { status: 'failed', error: msg } };
     }
     const disk = await this.disks.prepare(j.id, j.repo);
@@ -86,6 +102,7 @@ export class JobProcess {
       '-e', `RUNNER=${j.runner}`, '-e', `MODEL=${j.model ?? ''}`,
       '-e', `BASE_BRANCH=${j.base_branch}`, '-e', `BRANCH=${j.branch}`,
       '-e', `OPEN_PR=${this.cfg.openPr ? '1' : '0'}`, '-e', `PR_ASSIGNEE=${this.cfg.prAssignee}`,
+      ...envArgs(toml),
       '--env-file', this.envPath,
       // Bind mount: the agent's transcript lands here and outlives the VM.
       '-v', `${this.outDir}:/out`,
@@ -123,14 +140,14 @@ export class JobProcess {
     this.child?.kill('SIGTERM');
   }
 
-  /** Agent secrets plus a git identity for this one repo. Returns a description of the identity source for the log. */
-  private async writeEnvFile(): Promise<string> {
+  /** Agent secrets plus a git identity for this one repo. Returns the identity; its token also reads .eumaeus.toml. */
+  private async writeEnvFile(): Promise<GitIdentity> {
     mkdirSync(dirname(this.envPath), { recursive: true, mode: 0o700 });
     const secrets = existsSync(this.cfg.secretsFile) ? readFileSync(this.cfg.secretsFile, 'utf8').trimEnd() + '\n' : '';
     const id = await this.creds.identityFor(this.job.repo);
     const lines = [`GH_TOKEN=${id.token}`, `GIT_AUTHOR_NAME=${id.name}`, `GIT_AUTHOR_EMAIL=${id.email}`];
     writeFileSync(this.envPath, `${secrets}${lines.join('\n')}\n`, { mode: 0o600 });
-    return `${id.source} as ${id.name}`;
+    return id;
   }
 }
 
