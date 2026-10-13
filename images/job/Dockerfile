@@ -28,6 +28,9 @@ RUN curl -fsSL --compressed https://antigravity.google/cli/install.sh | bash \
  && mkdir -p /home/agent/.gemini/antigravity-cli \
  && echo '{"modelProvider":"gemini"}' > /home/agent/.gemini/antigravity-cli/settings.json
 ENV PATH="/home/agent/.local/bin:${PATH}"
+# The repo commit this image was built from. scripts/build-image.sh passes it; job.sh logs it.
+ARG COMMIT=unknown
+ENV EUMAEUS_COMMIT=$COMMIT
 # Last: job.sh changes often and must not invalidate the layers above.
 COPY --chmod=0755 job.sh /usr/local/bin/job
 WORKDIR /work

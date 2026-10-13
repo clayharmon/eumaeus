@@ -5,6 +5,7 @@ import { pickCredentials } from './credentials.ts';
 import { Db } from './db.ts';
 import { startHttp } from './http.ts';
 import { Scheduler } from './jobs.ts';
+import { dispatcherCommit, imageCommit } from './version.ts';
 
 const log = (s: string): void => console.error(`[eumaeus] ${new Date().toISOString()} ${s}`);
 
@@ -18,9 +19,13 @@ if (creds.describe.startsWith('gh-cli')) log(`no GitHub App at ${config.githubAp
 const recovered = await sched.recover();
 if (recovered) log(`marked ${recovered} orphaned running job(s) failed`);
 log(`data=${config.dataDir} image=${config.image} max_concurrent=${config.maxConcurrent} per_job=${config.cpus}cpu/${config.memory}`);
+log(`commit=${dispatcherCommit() ?? 'unknown'} image_commit=${(await imageCommit(config.image)) ?? 'unknown'}`);
+if (sched.paused()) log(`paused: queued jobs wait until ${sched.pauseFile} is removed`);
 
 const http = startHttp(config, sched, db, creds, log);
 sched.pump();
+// Picks up queued jobs after the pause file is removed; submit and job exit pump on their own.
+setInterval(() => sched.pump(), 5_000).unref();
 
 let stopping = false;
 async function stop(signal: string): Promise<void> {

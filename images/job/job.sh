@@ -8,7 +8,9 @@
 # there is one). The PR is opened from that file; without it the body is the task plus the agent's summary.
 # Runner credentials: claude ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN; codex OPENAI_API_KEY or CODEX_API_KEY;
 #   antigravity GEMINI_API_KEY; pi any provider key, e.g. ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY, OPENROUTER_API_KEY.
-# stdout: one JSON line with the outcome. stderr: progress.
+# Output: the dispatcher mounts a host directory at /out; the agent's own output stream is written there and
+#   outlives the VM. Without /out (scripts/run-job.sh) it stays in /work.
+# stdout: one JSON line with the outcome, including "usage" once the agent has run. stderr: progress.
 set -euo pipefail
 
 : "${JOB_ID:?}" "${REPO:?}" "${TASK:?}" "${GH_TOKEN:?}"
@@ -19,16 +21,18 @@ MODEL="${MODEL:-}"
 OPEN_PR="${OPEN_PR:-1}"
 AGENT_SUMMARY=""
 COST_LINE=""
+USAGE=""
+OUT=/work; { [ -d /out ] && [ -w /out ]; } && OUT=/out
 
 log() { printf '[job %s] %s\n' "$JOB_ID" "$*" >&2; }
-emit() { printf '{"job_id":"%s","status":"%s"%s}\n' "$JOB_ID" "$1" "${2:-}"; }
+emit() { printf '{"job_id":"%s","status":"%s"%s%s}\n' "$JOB_ID" "$1" "${2:-}" "${USAGE:+,\"usage\":$USAGE}"; }
 
 git config --global user.name  "${GIT_AUTHOR_NAME:-eumaeus}"
 git config --global user.email "${GIT_AUTHOR_EMAIL:-eumaeus@users.noreply.github.com}"
 git config --global init.defaultBranch main
 gh auth setup-git >/dev/null
 
-log "clone $REPO @ $BASE_BRANCH"
+log "clone $REPO @ $BASE_BRANCH (image ${EUMAEUS_COMMIT:-unknown})"
 git clone -q --branch "$BASE_BRANCH" "https://github.com/$REPO.git" /work/repo
 cd /work/repo
 # Existing branch (e.g. a PR to iterate on): build on it. Otherwise start from the base.
@@ -94,9 +98,9 @@ run_agent() {
       local args=(-p --output-format stream-json --verbose --dangerously-skip-permissions)
       [ -n "$MODEL" ] && args+=(--model "$MODEL")
       local rc=0
-      claude "${args[@]}" "$AGENT_TASK" | tee /work/runner.jsonl | narrate_claude || rc=${PIPESTATUS[0]}
+      claude "${args[@]}" "$AGENT_TASK" | tee "$OUT/runner.jsonl" | narrate_claude || rc=${PIPESTATUS[0]}
       [ "$rc" -eq 0 ] || return "$rc"
-      jq -c 'select(.type == "result")' /work/runner.jsonl | tail -n 1 > /work/runner.json
+      jq -cR 'fromjson? | select(.type == "result")' "$OUT/runner.jsonl" | tail -n 1 > /work/runner.json
       [ -s /work/runner.json ] || { log "claude exited 0 without a result event"; return 5; }
       AGENT_SUMMARY="$(jq -r '.result // ""' /work/runner.json | head -c 4000)"
       COST_LINE="model=$(jq -r '(.modelUsage // {}) | keys | join("+") | if . == "" then "?" else . end' /work/runner.json) cost_usd=$(jq -r '.total_cost_usd // "?"' /work/runner.json) turns=$(jq -r '.num_turns // "?"' /work/runner.json)"
@@ -107,26 +111,26 @@ run_agent() {
       local args=(exec --json --sandbox danger-full-access --skip-git-repo-check --ephemeral -o /work/codex-last.md)
       [ -n "$MODEL" ] && args+=(-m "$MODEL")
       local rc=0
-      codex "${args[@]}" "$AGENT_TASK" | tee /work/runner.jsonl | narrate_codex || rc=${PIPESTATUS[0]}
+      codex "${args[@]}" "$AGENT_TASK" | tee "$OUT/runner.jsonl" | narrate_codex || rc=${PIPESTATUS[0]}
       [ "$rc" -eq 0 ] || return "$rc"
       AGENT_SUMMARY="$(head -c 4000 /work/codex-last.md 2>/dev/null || true)"
-      COST_LINE="$(jq -r 'select(.type=="turn.completed") | .usage | "tokens in=\(.input_tokens) cached=\(.cached_input_tokens // 0) out=\(.output_tokens)"' /work/runner.jsonl | tail -1)"
+      COST_LINE="$(jq -r 'select(.type=="turn.completed") | .usage | "tokens in=\(.input_tokens) cached=\(.cached_input_tokens // 0) out=\(.output_tokens)"' "$OUT/runner.jsonl" | tail -1)"
       ;;
     antigravity)
       need no_gemini_credentials GEMINI_API_KEY
       local args=(-p --output-format json --dangerously-skip-permissions)
       [ -n "$MODEL" ] && args+=(--model "$MODEL")
-      agy "${args[@]}" "$AGENT_TASK" > /work/runner.json || return $?
-      [ "$(jq -r '.status // ""' /work/runner.json)" = "SUCCESS" ] || { log "agy status: $(jq -c '{status, error}' /work/runner.json)"; return 5; }
-      AGENT_SUMMARY="$(jq -r '.response // ""' /work/runner.json | head -c 4000)"
-      COST_LINE="tokens in=$(jq -r '.usage.input_tokens // "?"' /work/runner.json) out=$(jq -r '.usage.output_tokens // "?"' /work/runner.json) turns=$(jq -r '.num_turns // "?"' /work/runner.json)"
+      agy "${args[@]}" "$AGENT_TASK" > "$OUT/runner.json" || return $?
+      [ "$(jq -r '.status // ""' "$OUT/runner.json")" = "SUCCESS" ] || { log "agy status: $(jq -c '{status, error}' "$OUT/runner.json")"; return 5; }
+      AGENT_SUMMARY="$(jq -r '.response // ""' "$OUT/runner.json" | head -c 4000)"
+      COST_LINE="tokens in=$(jq -r '.usage.input_tokens // "?"' "$OUT/runner.json") out=$(jq -r '.usage.output_tokens // "?"' "$OUT/runner.json") turns=$(jq -r '.num_turns // "?"' "$OUT/runner.json")"
       ;;
     pi)
       need no_provider_credentials ANTHROPIC_API_KEY OPENAI_API_KEY GEMINI_API_KEY OPENROUTER_API_KEY XAI_API_KEY GROQ_API_KEY MISTRAL_API_KEY
       local args=(-p --no-session --no-approve)
       [ -n "$MODEL" ] && args+=(--model "$MODEL")
-      pi "${args[@]}" "$AGENT_TASK" > /work/runner.txt || return $?
-      AGENT_SUMMARY="$(tail -c 4000 /work/runner.txt)"
+      pi "${args[@]}" "$AGENT_TASK" > "$OUT/runner.txt" || return $?
+      AGENT_SUMMARY="$(tail -c 4000 "$OUT/runner.txt")"
       COST_LINE="usage not reported by pi print mode"
       ;;
     shell)
@@ -134,6 +138,26 @@ run_agent() {
       ;;
     *)
       log "unknown runner: $RUNNER"; emit failed ',"error":"unknown_runner"'; exit 2
+      ;;
+  esac
+}
+
+# Usage for the result line, as one JSON object. Prints nothing when the runner reports none (pi, shell).
+usage_json() {
+  case "$RUNNER" in
+    claude)
+      jq -cR 'fromjson? | select(.type == "result")
+        | {cost_usd: .total_cost_usd, turns: .num_turns, duration_s: (((.duration_ms // 0) / 1000) | floor),
+           models: ((.modelUsage // {}) | keys)}' "$OUT/runner.jsonl" | tail -n 1
+      ;;
+    codex)
+      jq -cR 'fromjson? | select(.type == "turn.completed") | .usage' "$OUT/runner.jsonl" \
+        | jq -sc 'if length == 0 then empty else
+            {input_tokens: (map(.input_tokens // 0) | add), cached_input_tokens: (map(.cached_input_tokens // 0) | add),
+             output_tokens: (map(.output_tokens // 0) | add)} end'
+      ;;
+    antigravity)
+      jq -c '{input_tokens: .usage.input_tokens, output_tokens: .usage.output_tokens, turns: .num_turns}' "$OUT/runner.json"
       ;;
   esac
 }
@@ -151,8 +175,11 @@ if [ "$RUNNER" != shell ]; then
   log "pr description requested at $PR_FILE${PR_TEMPLATE:+ (template: $PR_TEMPLATE)}"
 fi
 
-if ! run_agent; then
-  rc=$?
+# `run_agent || rc=$?` rather than `if ! run_agent`: inside that if, $? is the negated status, always 0.
+rc=0
+run_agent || rc=$?
+USAGE="$(usage_json 2>/dev/null || true)"
+if [ "$rc" -ne 0 ]; then
   log "runner exited $rc"
   emit failed ",\"error\":\"runner_exit_$rc\""
   exit 4

@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Config } from './config.ts';
 import type { CredentialSource } from './credentials.ts';
@@ -33,8 +33,12 @@ export class Scheduler {
 
   logPath(id: string): string { return join(this.cfg.dataDir, 'logs', `${id}.log`); }
   private envPath(id: string): string { return join(this.cfg.dataDir, 'env', `${id}.env`); }
+  private outDir(id: string): string { return join(this.cfg.dataDir, 'out', id); }
+  /** While this file exists, queued jobs stay queued. scripts/update.sh creates it to drain before a restart. */
+  get pauseFile(): string { return join(this.cfg.dataDir, 'paused'); }
 
   activeCount(): number { return this.active.size; }
+  paused(): boolean { return existsSync(this.pauseFile); }
 
   submit(input: SubmitInput): JobRow {
     const id = newJobId();
@@ -55,6 +59,7 @@ export class Scheduler {
 
   /** Start queued jobs until the concurrency limit is reached. */
   pump(): void {
+    if (this.paused()) return;
     while (this.active.size < this.cfg.maxConcurrent) {
       const job = this.db.claimNext();
       if (!job) return;
@@ -63,7 +68,7 @@ export class Scheduler {
   }
 
   private async launch(job: JobRow): Promise<void> {
-    const proc = new JobProcess(job, this.cfg, this.creds, this.logPath(job.id), this.envPath(job.id));
+    const proc = new JobProcess(job, this.cfg, this.creds, this.logPath(job.id), this.envPath(job.id), this.outDir(job.id));
     this.active.set(job.id, proc);
     this.timers.set(job.id, setTimeout(() => {
       this.db.finish(job.id, 'failed', null, null, `timeout after ${this.cfg.jobTimeoutMs / 60_000} min`);
@@ -121,7 +126,20 @@ export class Scheduler {
     const lines = readFileSync(p, 'utf8').split('\n');
     return lines.slice(Math.max(0, lines.length - tail - 1)).join('\n');
   }
+
+  /** Last `tail` lines of the agent's own output (runner.jsonl, runner.json, or runner.txt), optionally filtered. */
+  transcript(id: string, tail: number, grep: string | undefined): string | null {
+    const dir = this.outDir(id);
+    const name = existsSync(dir) ? readdirSync(dir).find((f) => f.startsWith('runner.')) : undefined;
+    if (!name) return null;
+    let lines = readFileSync(join(dir, name), 'utf8').split('\n').filter((l) => l !== '');
+    if (grep) lines = lines.filter((l) => l.includes(grep));
+    const cut = (l: string): string => (l.length > TRANSCRIPT_LINE_MAX ? `${l.slice(0, TRANSCRIPT_LINE_MAX)}… [${l.length - TRANSCRIPT_LINE_MAX} more chars]` : l);
+    return `${name}: ${lines.length} line(s)${grep ? ` containing ${JSON.stringify(grep)}` : ''}\n${lines.slice(-tail).map(cut).join('\n')}`;
+  }
 }
+
+const TRANSCRIPT_LINE_MAX = 4_000;
 
 function statusFor(out: RunOutcome): JobStatus {
   const s = out.result?.['status'];

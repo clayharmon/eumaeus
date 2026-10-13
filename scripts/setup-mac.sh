@@ -27,10 +27,7 @@ step "dependencies"
 pnpm install --frozen-lockfile --silent
 
 step "job image"
-container builder start >/dev/null 2>&1 || true
-# No -q: it stalled indefinitely on container 1.5.0.
-container build -t eumaeus-job:dev -f images/job/Dockerfile images/job 2>&1 | tail -3
-container builder stop >/dev/null 2>&1 || true
+scripts/build-image.sh
 
 step "secrets"
 for f in secrets.env github-app.json; do

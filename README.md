@@ -14,7 +14,7 @@ Limits:
 
 - Runs on Apple Silicon Macs only. Jobs use Apple's [`container`](https://github.com/apple/container) for VMs.
 - Works with GitHub repos only.
-- Jobs time out after 60 minutes. Restarting the dispatcher marks in-flight jobs `failed`.
+- Jobs time out after 60 minutes. Restarting the dispatcher marks in-flight jobs `failed`; `scripts/update.sh` waits for them first.
 
 ## What a job does
 
@@ -22,7 +22,7 @@ Limits:
 2. The dispatcher boots a VM from the job image. At most `EUMAEUS_MAX_CONCURRENT` (default 2) run at a time.
 3. The VM clones the repo, runs the agent on the task, commits, and pushes `job/<id>`.
 4. It opens a PR with the title and body the agent wrote to `/work/pr.md`, using the repo's PR template if it has one.
-5. The VM is deleted. The pushed branch, the PR, and the job log are all that remain.
+5. The VM is deleted. The pushed branch, the PR, the job log, and the agent's transcript are all that remain. Logs and transcripts stay in `~/.local/share/eumaeus` until you delete them.
 
 The VM gets a GitHub App installation token scoped to that one repo and valid for one hour. Agent API keys reach it through a `0600` env file that exists only while the job runs.
 
@@ -43,13 +43,18 @@ claude mcp add -s user -t http eumaeus http://127.0.0.1:7777/mcp -H "Authorizati
 
 Without a GitHub App, jobs use your `gh` token instead. That token has your full scope and the commits show up as you.
 
+### Updating
+
+`scripts/update.sh` runs `git pull --ff-only` and `pnpm install`, pauses new jobs, waits for running jobs to finish, rebuilds the job image, and restarts the service. Queued jobs start once the new dispatcher is up. `/healthz` reports `commit` for the dispatcher and `image_commit` for the job image, and each job log names the image commit on its clone line.
+
 ## MCP tools
 
 | Tool | What it does |
 |---|---|
 | `submit_job(repo, task, runner?, model?, base_branch?, branch?, cpus?, memory?)` | Queues a job. Pass `branch` to push to an existing PR branch. |
-| `job_status(job_id)` | Returns `queued`, `running`, `pushed`, `no_changes`, `failed`, or `cancelled`, plus the PR URL. |
+| `job_status(job_id)` | Returns `queued`, `running`, `pushed`, `no_changes`, `failed`, or `cancelled`, plus the PR URL and `result.usage`: cost and turns for `claude`, token counts for `codex` and `antigravity`. |
 | `job_logs(job_id, tail?)` | Tails the log. `claude` and `codex` add one `[agent]` line per tool call as they run. |
+| `job_transcript(job_id, tail?, grep?)` | Returns the agent's own output stream, kept after the VM is gone. Use it to check what the agent actually ran. |
 | `cancel_job(job_id)` | Cancels a queued job, or stops a running one and removes its VM. |
 | `list_jobs(status?, limit?)` | Lists recent jobs, newest first. |
 | `merge_pr(repo, number, method?, delete_branch?)` | Merges as the bot. Refuses on a conflict; a job on the PR branch can resolve it. |
@@ -90,6 +95,7 @@ The launchd agent reads env vars from `~/.config/eumaeus/dispatcher.env`. Defaul
 - `pnpm start` runs the dispatcher in the foreground. Node 24 strips the types; there is no build step.
 - `scripts/service.sh install|status|logs|restart|uninstall` manages the launchd agent. Logs go to `~/Library/Logs/eumaeus/`.
 - `scripts/run-job.sh <owner/repo> "<task>" [runner] [model]` runs one job by hand, without the dispatcher.
+- `scripts/build-image.sh [image]` builds the job image with the checkout's commit stamped into it.
 - `images/job/job.sh` is everything that runs inside the VM.
 
 ## License

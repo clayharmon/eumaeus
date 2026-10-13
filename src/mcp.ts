@@ -72,6 +72,24 @@ export function buildMcpServer(sched: Scheduler, db: Db, creds: CredentialSource
   );
 
   server.registerTool(
+    'job_transcript',
+    {
+      title: 'Job transcript',
+      description:
+        "The agent's own output, kept after the VM is gone: one JSON event per line for claude and codex, one JSON " +
+        'document for antigravity, plain text for pi, nothing for shell. Use it to check what the agent actually ran. ' +
+        'grep keeps lines containing that substring; tail keeps the last lines after filtering. Lines over 4000 characters are cut.',
+      inputSchema: {
+        job_id: z.string(),
+        tail: z.number().int().min(1).max(500).default(50),
+        grep: z.string().optional(),
+      },
+    },
+    async ({ job_id, tail, grep }) =>
+      text(db.get(job_id) ? sched.transcript(job_id, tail, grep) ?? '(no transcript)' : `not found: ${job_id}`),
+  );
+
+  server.registerTool(
     'cancel_job',
     { title: 'Cancel a job', description: 'Cancel a queued or running job. Running jobs have their VM stopped and removed.', inputSchema: { job_id: z.string() } },
     async ({ job_id }) => {

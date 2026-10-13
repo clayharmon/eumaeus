@@ -40,20 +40,23 @@ export class JobProcess {
   private readonly cfg: Config;
   private readonly logPath: string;
   private readonly envPath: string;
+  private readonly outDir: string;
   private readonly creds: CredentialSource;
 
-  constructor(job: JobRow, cfg: Config, creds: CredentialSource, logPath: string, envPath: string) {
+  constructor(job: JobRow, cfg: Config, creds: CredentialSource, logPath: string, envPath: string, outDir: string) {
     this.job = job;
     this.cfg = cfg;
     this.creds = creds;
     this.logPath = logPath;
     this.envPath = envPath;
+    this.outDir = outDir;
     this.name = vmName(job.id);
   }
 
   async run(): Promise<RunOutcome> {
     const j = this.job;
     mkdirSync(dirname(this.logPath), { recursive: true });
+    mkdirSync(this.outDir, { recursive: true, mode: 0o700 });
     const log = createWriteStream(this.logPath, { flags: 'a' });
     log.write(`[dispatcher] ${new Date().toISOString()} start ${this.name} repo=${j.repo} runner=${j.runner} cpus=${j.cpus} mem=${j.memory}\n`);
 
@@ -74,6 +77,8 @@ export class JobProcess {
       '-e', `BASE_BRANCH=${j.base_branch}`, '-e', `BRANCH=${j.branch}`,
       '-e', `OPEN_PR=${this.cfg.openPr ? '1' : '0'}`, '-e', `PR_ASSIGNEE=${this.cfg.prAssignee}`,
       '--env-file', this.envPath,
+      // Bind mount: the agent's transcript lands here and outlives the VM.
+      '-v', `${this.outDir}:/out`,
       this.cfg.image,
     ];
     return this.spawnVm(args, log);
