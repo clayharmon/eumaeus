@@ -4,6 +4,7 @@ import type { CredentialSource } from './credentials.ts';
 import { JOB_STATUSES, type Db, type JobRow } from './db.ts';
 import type { Scheduler } from './jobs.ts';
 import { mergePr } from './prs.ts';
+import { RUNNERS, missingSecret } from './secrets.ts';
 
 const text = (v: unknown): { content: { type: 'text'; text: string }[] } => ({
   content: [{ type: 'text', text: typeof v === 'string' ? v : JSON.stringify(v, null, 2) }],
@@ -20,7 +21,7 @@ function view(j: JobRow): Record<string, unknown> {
   };
 }
 
-export function buildMcpServer(sched: Scheduler, db: Db, creds: CredentialSource): McpServer {
+export function buildMcpServer(sched: Scheduler, db: Db, creds: CredentialSource, secretsFile: string): McpServer {
   const server = new McpServer({ name: 'eumaeus', version: '0.1.0' });
 
   server.registerTool(
@@ -35,15 +36,20 @@ export function buildMcpServer(sched: Scheduler, db: Db, creds: CredentialSource
       inputSchema: {
         repo: z.string().regex(/^[\w.-]+\/[\w.-]+$/).describe('GitHub repo as owner/name'),
         task: z.string().min(1).max(20_000).describe('Instructions for the agent'),
-        runner: z.enum(['claude', 'shell']).default('claude').describe('claude = Claude Code headless; shell = run task as bash (testing)'),
-        model: z.string().optional().describe('Model override passed to the runner'),
+        runner: z.enum(RUNNERS).default('claude').describe(
+          'claude = Claude Code; codex = OpenAI Codex CLI; antigravity = Google agy; pi = pi (any provider, give model as provider/id); shell = run task as bash (testing)'),
+        model: z.string().optional().describe('Model override. claude/codex/antigravity: vendor model id. pi: provider/model or a fuzzy name like "sonnet"'),
         base_branch: z.string().default('main'),
         branch: z.string().optional().describe('Existing branch to continue (e.g. a PR head). Default: new job/<id>'),
         cpus: z.number().int().min(1).max(8).optional(),
         memory: z.string().regex(/^\d+[MG]$/).optional().describe('e.g. 4G'),
       },
     },
-    async (args) => text(view(sched.submit(args))),
+    async (args) => {
+      const missing = missingSecret(args.runner, secretsFile);
+      if (missing) return text({ error: missing });
+      return text(view(sched.submit(args)));
+    },
   );
 
   server.registerTool(

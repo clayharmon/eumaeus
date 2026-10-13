@@ -51,7 +51,7 @@ export function startHttp(cfg: Config, sched: Scheduler, db: Db, creds: Credenti
 
     try {
       const body = req.method === 'POST' ? await readJson(req) : undefined;
-      const mcp = buildMcpServer(sched, db, creds);
+      const mcp = buildMcpServer(sched, db, creds, cfg.secretsFile);
       const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
       res.on('close', () => { void transport.close(); void mcp.close(); });
       await mcp.connect(transport);
