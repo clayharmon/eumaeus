@@ -37,6 +37,13 @@ Config is env vars with defaults, see `src/config.ts`: `EUMAEUS_HOST`, `EUMAEUS_
 Secrets for the agent go in `~/.config/eumaeus/secrets.env` (`ANTHROPIC_API_KEY=...` or
 `CLAUDE_CODE_OAUTH_TOKEN=...`). The file is passed to the VM with `--env-file` and never copied into the image.
 
+## Job image
+
+- `git` clones the repo and commits the job's work.
+- `gh` opens pull requests and talks to the GitHub API.
+- `ripgrep` (`rg`) searches code quickly.
+- `jq` parses and filters JSON.
+
 ## Limits in M1
 
 - GitHub auth is your personal `gh` token, fetched per job. M2 replaces it with a GitHub App installation token.
