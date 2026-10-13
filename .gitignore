@@ -1,5 +1,4 @@
 node_modules/
 .env
 *.env
-secrets*
 .DS_Store
