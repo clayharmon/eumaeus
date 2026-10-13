@@ -16,9 +16,10 @@ command -v pnpm >/dev/null || { echo "pnpm not found (mise install?)"; exit 1; }
 echo "container $(container --version | awk '{print $4}') / node $(node --version) / pnpm $(pnpm --version)"
 
 step "container system"
-container system start >/dev/null 2>&1 || true
+# Kernel first: a fresh install prompts for one on first start, and that prompt would eat stdin over ssh.
+container system kernel set --recommended </dev/null >/dev/null 2>&1 || true
+container system start </dev/null >/dev/null 2>&1 || true
 container system status >/dev/null 2>&1 || { echo "container system did not start"; exit 1; }
-container system kernel set --recommended >/dev/null 2>&1 || true
 echo "running"
 
 step "dependencies"
@@ -26,7 +27,8 @@ pnpm install --frozen-lockfile --silent
 
 step "job image"
 container builder start >/dev/null 2>&1 || true
-container build -q -t eumaeus-job:dev -f images/job/Dockerfile images/job 2>&1 | tail -1 || container build -t eumaeus-job:dev -f images/job/Dockerfile images/job 2>&1 | tail -3
+# No -q: it stalled indefinitely on container 1.5.0.
+container build -t eumaeus-job:dev -f images/job/Dockerfile images/job 2>&1 | tail -3
 container builder stop >/dev/null 2>&1 || true
 
 step "secrets"
@@ -42,7 +44,7 @@ scripts/service.sh status
 if [ "${1:-}" = "--serve" ] && command -v tailscale >/dev/null; then
   step "tailnet"
   tailscale serve --bg --https="$PORT" "http://127.0.0.1:$PORT" >/dev/null
-  HOST="$(tailscale status --self --json | jq -r '.Self.DNSName' | sed 's/\.$//')"
+  HOST="$(tailscale status --self --json | python3 -c 'import json,sys; print(json.load(sys.stdin)["Self"]["DNSName"].rstrip("."))')"
   echo "https://$HOST:$PORT/mcp"
   echo "token: $(grep '^EUMAEUS_AUTH_TOKEN=' "$HOME/.config/eumaeus/dispatcher.env" | cut -d= -f2)"
   echo "register: claude mcp add -s user -t http eumaeus https://$HOST:$PORT/mcp -H \"Authorization: Bearer <token>\""
