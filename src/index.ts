@@ -1,6 +1,7 @@
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { config } from './config.ts';
+import { pickCredentials } from './credentials.ts';
 import { Db } from './db.ts';
 import { startHttp } from './http.ts';
 import { Scheduler } from './jobs.ts';
@@ -9,7 +10,10 @@ const log = (s: string): void => console.error(`[eumaeus] ${new Date().toISOStri
 
 mkdirSync(join(config.dataDir, 'logs'), { recursive: true });
 const db = new Db(config.dataDir);
-const sched = new Scheduler(db, config);
+const creds = pickCredentials(config.githubAppFile, config.ghUser);
+const sched = new Scheduler(db, config, creds);
+log(`git identity: ${creds.describe}`);
+if (creds.describe.startsWith('gh-cli')) log(`no GitHub App at ${config.githubAppFile}; run: node scripts/github-app-setup.ts`);
 
 const recovered = await sched.recover();
 if (recovered) log(`marked ${recovered} orphaned running job(s) failed`);

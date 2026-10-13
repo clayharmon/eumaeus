@@ -9,11 +9,12 @@ const text = (v: unknown): { content: { type: 'text'; text: string }[] } => ({
 
 /** Trim the row for tool output: the task can be long and the result is JSON-in-a-string. */
 function view(j: JobRow): Record<string, unknown> {
+  const result = j.result ? (JSON.parse(j.result) as Record<string, unknown>) : null;
   return {
     ...j,
     task: j.task.length > 300 ? `${j.task.slice(0, 300)}…` : j.task,
-    result: j.result ? (JSON.parse(j.result) as unknown) : null,
-    url: j.status === 'pushed' ? `https://github.com/${j.repo}/tree/${j.branch}` : null,
+    result,
+    url: typeof result?.['pr_url'] === 'string' ? result['pr_url'] : j.status === 'pushed' ? `https://github.com/${j.repo}/tree/${j.branch}` : null,
   };
 }
 

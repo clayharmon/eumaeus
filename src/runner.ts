@@ -1,7 +1,8 @@
-import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
-import { createWriteStream, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { spawn, type ChildProcess } from 'node:child_process';
+import { createWriteStream, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync, type WriteStream } from 'node:fs';
 import { dirname } from 'node:path';
 import type { Config } from './config.ts';
+import type { CredentialSource } from './credentials.ts';
 import type { JobRow } from './db.ts';
 
 export interface RunOutcome {
@@ -9,10 +10,6 @@ export interface RunOutcome {
   signal: NodeJS.Signals | null;
   /** Last JSON line job.sh printed on stdout, if any. */
   result: Record<string, unknown> | null;
-}
-
-export function ghToken(user: string): string {
-  return execFileSync('gh', ['auth', 'token', '-u', user], { encoding: 'utf8' }).trim();
 }
 
 export function vmName(jobId: string): string {
@@ -43,32 +40,46 @@ export class JobProcess {
   private readonly cfg: Config;
   private readonly logPath: string;
   private readonly envPath: string;
+  private readonly creds: CredentialSource;
 
-  constructor(job: JobRow, cfg: Config, logPath: string, envPath: string) {
+  constructor(job: JobRow, cfg: Config, creds: CredentialSource, logPath: string, envPath: string) {
     this.job = job;
     this.cfg = cfg;
+    this.creds = creds;
     this.logPath = logPath;
     this.envPath = envPath;
     this.name = vmName(job.id);
   }
 
-  run(): Promise<RunOutcome> {
-    this.writeEnvFile();
+  async run(): Promise<RunOutcome> {
     const j = this.job;
+    mkdirSync(dirname(this.logPath), { recursive: true });
+    const log = createWriteStream(this.logPath, { flags: 'a' });
+    log.write(`[dispatcher] ${new Date().toISOString()} start ${this.name} repo=${j.repo} runner=${j.runner} cpus=${j.cpus} mem=${j.memory}\n`);
+
+    try {
+      const source = await this.writeEnvFile();
+      log.write(`[dispatcher] credentials: ${source}\n`);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      log.write(`[dispatcher] credential error: ${msg}\n`);
+      log.end();
+      return { exitCode: null, signal: null, result: { status: 'failed', error: msg } };
+    }
     const args = [
       'run', '--rm', '--progress', 'none', '--name', this.name,
       '--cpus', String(j.cpus), '--memory', j.memory,
       '-e', `JOB_ID=${j.id}`, '-e', `REPO=${j.repo}`, '-e', `TASK=${j.task}`,
       '-e', `RUNNER=${j.runner}`, '-e', `MODEL=${j.model ?? ''}`,
       '-e', `BASE_BRANCH=${j.base_branch}`, '-e', `BRANCH=${j.branch}`,
+      '-e', `OPEN_PR=${this.cfg.openPr ? '1' : '0'}`,
       '--env-file', this.envPath,
       this.cfg.image,
     ];
+    return this.spawnVm(args, log);
+  }
 
-    mkdirSync(dirname(this.logPath), { recursive: true });
-    const log = createWriteStream(this.logPath, { flags: 'a' });
-    log.write(`[dispatcher] ${new Date().toISOString()} start ${this.name} repo=${j.repo} runner=${j.runner} cpus=${j.cpus} mem=${j.memory}\n`);
-
+  private spawnVm(args: string[], log: WriteStream): Promise<RunOutcome> {
     const child = spawn('container', args, { stdio: ['ignore', 'pipe', 'pipe'] });
     this.child = child;
     let stdout = '';
@@ -96,10 +107,14 @@ export class JobProcess {
     this.child?.kill('SIGTERM');
   }
 
-  private writeEnvFile(): void {
+  /** Agent secrets plus a git identity for this one repo. Returns a description of the identity source for the log. */
+  private async writeEnvFile(): Promise<string> {
     mkdirSync(dirname(this.envPath), { recursive: true, mode: 0o700 });
     const secrets = existsSync(this.cfg.secretsFile) ? readFileSync(this.cfg.secretsFile, 'utf8').trimEnd() + '\n' : '';
-    writeFileSync(this.envPath, `${secrets}GH_TOKEN=${ghToken(this.cfg.ghUser)}\n`, { mode: 0o600 });
+    const id = await this.creds.identityFor(this.job.repo);
+    const lines = [`GH_TOKEN=${id.token}`, `GIT_AUTHOR_NAME=${id.name}`, `GIT_AUTHOR_EMAIL=${id.email}`];
+    writeFileSync(this.envPath, `${secrets}${lines.join('\n')}\n`, { mode: 0o600 });
+    return `${id.source} as ${id.name}`;
   }
 }
 
