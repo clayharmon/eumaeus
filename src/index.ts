@@ -2,6 +2,7 @@ import { existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { config } from './config.ts';
 import { pickCredentials } from './credentials.ts';
+import { CiWatcher } from './ci.ts';
 import { Db } from './db.ts';
 import { Disks } from './disks.ts';
 import { startHttp } from './http.ts';
@@ -29,6 +30,7 @@ const http = startHttp(config, sched, db, creds, log);
 sched.pump();
 // Picks up queued jobs after the pause file is removed; submit and job exit pump on their own.
 setInterval(() => sched.pump(), 5_000).unref();
+new CiWatcher(db, sched, creds, config, log).start();
 
 let stopping = false;
 async function stop(signal: string): Promise<void> {

@@ -13,8 +13,10 @@ const text = (v: unknown): { content: { type: 'text'; text: string }[] } => ({
 /** Trim the row for tool output: the task can be long and the result is JSON-in-a-string. */
 function view(j: JobRow): Record<string, unknown> {
   const result = j.result ? (JSON.parse(j.result) as Record<string, unknown>) : null;
+  const { ci_status, ci: ciDetail, ...row } = j;
   return {
-    ...j,
+    ...row,
+    ci: ci_status ? { status: ci_status, ...(ciDetail ? (JSON.parse(ciDetail) as Record<string, unknown>) : {}) } : null,
     task: j.task.length > 300 ? `${j.task.slice(0, 300)}…` : j.task,
     result,
     url: typeof result?.['pr_url'] === 'string' ? result['pr_url'] : j.status === 'pushed' ? `https://github.com/${j.repo}/tree/${j.branch}` : null,
@@ -45,6 +47,9 @@ export function buildMcpServer(sched: Scheduler, db: Db, creds: CredentialSource
         branch: z.string().optional().describe('Existing branch to continue (e.g. a PR head). Default: new job/<id>'),
         cpus: z.number().int().min(1).max(8).optional(),
         memory: z.string().regex(/^\d+[MG]$/).optional().describe('e.g. 4G'),
+        ci_fix: z.number().int().min(0).max(3).optional().describe(
+          'Follow-up jobs eumaeus may submit, one at a time, when CI fails on what this job pushed. Default EUMAEUS_CI_FIX (1). ' +
+          '0 watches CI and records the result without fixing; use it when you handle CI yourself.'),
       },
     },
     async (args) => {
@@ -56,7 +61,13 @@ export function buildMcpServer(sched: Scheduler, db: Db, creds: CredentialSource
 
   server.registerTool(
     'job_status',
-    { title: 'Job status', description: 'Current state of one job, including its result JSON and branch URL once pushed.', inputSchema: { job_id: z.string() } },
+    {
+      title: 'Job status',
+      description:
+        'Current state of one job: its result JSON, its branch or PR URL once pushed, and `ci` once pushed: pending, success, ' +
+        'failure, none (no checks), timeout, or unavailable, with each check and, after a failure, the follow-up job id.',
+      inputSchema: { job_id: z.string() },
+    },
     async ({ job_id }) => {
       const j = db.get(job_id);
       return text(j ? view(j) : { error: 'not found', job_id });

@@ -21,7 +21,11 @@ const manifest = {
   description: 'Self-hosted agent harness. Pushes branches and opens pull requests for jobs.',
   redirect_url: `http://localhost:${PORT}/callback`,
   public: false,
-  default_permissions: { contents: 'write', pull_requests: 'write', workflows: 'write', metadata: 'read', issues: 'read' },
+  default_permissions: {
+    contents: 'write', pull_requests: 'write', workflows: 'write', metadata: 'read', issues: 'read',
+    // src/ci.ts reads check runs, commit statuses, and Actions job logs.
+    checks: 'read', statuses: 'read', actions: 'read',
+  },
   default_events: [],
 };
 

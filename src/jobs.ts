@@ -16,6 +16,10 @@ export interface SubmitInput {
   branch?: string | undefined;
   cpus?: number | undefined;
   memory?: string | undefined;
+  /** Follow-up jobs allowed if this job's CI fails. Default: EUMAEUS_CI_FIX. */
+  ci_fix?: number | undefined;
+  /** Set by the CI watcher on the follow-up jobs it submits. */
+  parent_id?: string | undefined;
 }
 
 export class Scheduler {
@@ -57,6 +61,8 @@ export class Scheduler {
       branch: input.branch ?? `job/${id}`,
       cpus: input.cpus ?? this.cfg.cpus,
       memory: input.memory ?? this.cfg.memory,
+      parent_id: input.parent_id ?? null,
+      ci_fix: input.ci_fix ?? this.cfg.ciFix,
     });
     queueMicrotask(() => this.pump());
     return row;
@@ -101,6 +107,12 @@ export class Scheduler {
     // cancel() and the timeout write their own terminal status first; don't overwrite it.
     if (current && !TERMINAL.has(current.status)) {
       this.db.finish(job.id, statusFor(out), out.exitCode, out.result ? JSON.stringify(out.result) : null, errorFor(out));
+      const sha = out.result?.['commit'];
+      if (statusFor(out) === 'pushed' && typeof sha === 'string') {
+        // src/ci.ts picks it up from the database, so a restart keeps watching.
+        this.db.setCi(job.id, 'pending', { sha, since: new Date().toISOString() });
+        appendFileSync(this.logPath(job.id), `[ci] ${new Date().toISOString()} watching checks on ${sha.slice(0, 8)}\n`);
+      }
     }
     this.killed.delete(job.id);
     this.active.delete(job.id);

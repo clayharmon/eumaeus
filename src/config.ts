@@ -27,6 +27,10 @@ export const config = {
   jobTimeoutMs: Number(env('EUMAEUS_JOB_TIMEOUT_MIN', '60')) * 60_000,
   /** Size of each per-repo disk. The image file is sparse: it takes host space only for what jobs write. */
   diskSize: env('EUMAEUS_DISK_SIZE', '64G'),
+  /** Follow-up jobs a pushed job may start when its CI fails (src/ci.ts). 0 watches and records only. */
+  ciFix: Number(env('EUMAEUS_CI_FIX', '1')),
+  /** Stop watching a commit's checks after this long and record `timeout`. */
+  ciTimeoutMs: Number(env('EUMAEUS_CI_TIMEOUT_MIN', '60')) * 60_000,
 } as const;
 
 export type Config = typeof config;

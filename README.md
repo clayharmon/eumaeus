@@ -23,6 +23,7 @@ Limits:
 3. The VM clones the repo, sets up the repo's [environment](#environments), runs the agent on the task, commits, and pushes `job/<id>`.
 4. It opens a PR with the title and body the agent wrote to `/work/pr.md`, using the repo's PR template if it has one.
 5. The VM is deleted. The pushed branch, the PR, the job log, the agent's transcript, and the repo's disk are all that remain. Logs and transcripts stay in `~/.local/share/eumaeus` until you delete them.
+6. The dispatcher watches [CI](#ci) on the pushed commit and can send a failure to a follow-up job.
 
 The VM gets a GitHub App installation token scoped to that one repo and valid for one hour. Agent API keys reach it through a `0600` env file that exists only while the job runs.
 
@@ -88,12 +89,35 @@ Limits:
 - Cloning relies on `container` 1.5 storing a volume as one image file on the host. That is not a documented interface. If it changes, jobs run without a disk and the log says why.
 - Nix runs single-user without its build sandbox; the VM lacks the namespaces the sandbox needs.
 
+## CI
+
+After a job pushes, the dispatcher watches the checks on that commit: GitHub check runs, which include Actions, and commit statuses. It polls every 30 s from the host, so a 15-minute CI run holds no VM and no job slot. A restart resumes the watch.
+
+`job_status` shows `ci.status`:
+
+| Status | Meaning |
+|---|---|
+| `pending` | checks are still running |
+| `success` | every check passed, was skipped, or was neutral |
+| `failure` | a check failed; `ci.followup` names the fix job when one was sent |
+| `none` | no check or status 5 min after the push |
+| `timeout` | checks still running after `EUMAEUS_CI_TIMEOUT_MIN` (60) |
+| `unavailable` | the GitHub App can't read checks; see below |
+
+When a check fails and the job has fix attempts left, eumaeus submits a follow-up job on the same branch, with the same runner and model. Its task names the failing checks and carries their annotations and the Actions log up to the last error, then the original task. The follow-up is watched too, with one attempt fewer.
+
+- `submit_job(ci_fix: n)` sets the attempts for one job, and `EUMAEUS_CI_FIX` (default 1) sets the default. 0 watches without fixing, for callers that handle CI themselves.
+- `shell` jobs are watched and never fixed.
+- A cancelled or stale check is recorded, not sent for a fix.
+
+The GitHub App needs read access to Checks, Commit statuses, and Actions. `node scripts/github-app-setup.ts` asks for it on a new app. An app created before this change lacks it: on the app's settings page, under Permissions & events, set those three to Read-only and save, then accept the new permissions on the installation, which GitHub links to by email.
+
 ## MCP tools
 
 | Tool | What it does |
 |---|---|
-| `submit_job(repo, task, runner?, model?, base_branch?, branch?, cpus?, memory?)` | Queues a job. Pass `branch` to push to an existing PR branch. |
-| `job_status(job_id)` | Returns `queued`, `running`, `pushed`, `no_changes`, `failed`, or `cancelled`, plus the PR URL and `result.usage`: cost and turns for `claude`, token counts for `codex` and `antigravity`. |
+| `submit_job(repo, task, runner?, model?, base_branch?, branch?, cpus?, memory?, ci_fix?)` | Queues a job. Pass `branch` to push to an existing PR branch, `ci_fix` to change how many follow-ups a CI failure may start. |
+| `job_status(job_id)` | Returns `queued`, `running`, `pushed`, `no_changes`, `failed`, or `cancelled`, plus the PR URL, `result.usage` (cost and turns for `claude`, token counts for `codex` and `antigravity`), and `ci` once pushed. |
 | `job_logs(job_id, tail?)` | Tails the log. `claude` and `codex` add one `[agent]` line per tool call as they run. |
 | `job_transcript(job_id, tail?, grep?)` | Returns the agent's own output stream, kept after the VM is gone. Use it to check what the agent actually ran. |
 | `cancel_job(job_id)` | Cancels a queued job, or stops a running one and removes its VM. |
@@ -131,6 +155,8 @@ The launchd agent reads env vars from `~/.config/eumaeus/dispatcher.env`. Defaul
 | `EUMAEUS_SECRETS` | `~/.config/eumaeus/secrets.env` |
 | `EUMAEUS_GITHUB_APP` | `~/.config/eumaeus/github-app.json` |
 | `EUMAEUS_IMAGE` | `eumaeus-job:dev` |
+| `EUMAEUS_CI_FIX` | `1` follow-up job per pushed job when its CI fails; `0` watches only |
+| `EUMAEUS_CI_TIMEOUT_MIN` | `60` |
 | `EUMAEUS_DISK_SIZE` | `64G` per repo disk; the image file is sparse, so it takes only what jobs write |
 
 ## Development

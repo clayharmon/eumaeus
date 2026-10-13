@@ -5,6 +5,9 @@ import { join } from 'node:path';
 export const JOB_STATUSES = ['queued', 'running', 'pushed', 'no_changes', 'failed', 'cancelled'] as const;
 export type JobStatus = (typeof JOB_STATUSES)[number];
 export const TERMINAL: ReadonlySet<JobStatus> = new Set<JobStatus>(['pushed', 'no_changes', 'failed', 'cancelled']);
+/** CI on a pushed job's commit (src/ci.ts). Null: never pushed, so never watched. */
+export const CI_STATUSES = ['pending', 'success', 'failure', 'none', 'timeout', 'unavailable'] as const;
+export type CiStatus = (typeof CI_STATUSES)[number];
 
 export interface JobRow {
   id: string;
@@ -23,9 +26,19 @@ export interface JobRow {
   exit_code: number | null;
   result: string | null;
   error: string | null;
+  /** The job whose failing CI this job was submitted to fix. */
+  parent_id: string | null;
+  /** Follow-up jobs this job may start when its CI fails. */
+  ci_fix: number | null;
+  ci_status: CiStatus | null;
+  /** JSON: the commit, the checks, the follow-up job, and a note. */
+  ci: string | null;
 }
 
-export type NewJob = Pick<JobRow, 'id' | 'repo' | 'task' | 'runner' | 'model' | 'base_branch' | 'branch' | 'cpus' | 'memory'>;
+export type NewJob = Pick<JobRow, 'id' | 'repo' | 'task' | 'runner' | 'model' | 'base_branch' | 'branch' | 'cpus' | 'memory' | 'parent_id' | 'ci_fix'>;
+
+/** Columns added after M4; an older database gets them on open. */
+const ADDED_COLUMNS: Record<string, string> = { parent_id: 'TEXT', ci_fix: 'INTEGER', ci_status: 'TEXT', ci: 'TEXT' };
 
 const now = (): string => new Date().toISOString();
 
@@ -57,15 +70,19 @@ export class Db {
       );
       CREATE INDEX IF NOT EXISTS jobs_status_created ON jobs(status, created_at);
     `);
+    const have = new Set((this.db.prepare('PRAGMA table_info(jobs)').all() as { name: string }[]).map((c) => c.name));
+    for (const [name, type] of Object.entries(ADDED_COLUMNS)) {
+      if (!have.has(name)) this.db.exec(`ALTER TABLE jobs ADD COLUMN ${name} ${type}`);
+    }
   }
 
   insert(j: NewJob): JobRow {
     this.db
       .prepare(
-        `INSERT INTO jobs (id, repo, task, runner, model, base_branch, branch, cpus, memory, status, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?)`,
+        `INSERT INTO jobs (id, repo, task, runner, model, base_branch, branch, cpus, memory, parent_id, ci_fix, status, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?)`,
       )
-      .run(j.id, j.repo, j.task, j.runner, j.model, j.base_branch, j.branch, j.cpus, j.memory, now());
+      .run(j.id, j.repo, j.task, j.runner, j.model, j.base_branch, j.branch, j.cpus, j.memory, j.parent_id, j.ci_fix, now());
     return this.get(j.id) as JobRow;
   }
 
@@ -97,6 +114,14 @@ export class Db {
 
   idsWithStatus(status: JobStatus): string[] {
     return (this.db.prepare('SELECT id FROM jobs WHERE status = ?').all(status) as { id: string }[]).map((r) => r.id);
+  }
+
+  setCi(id: string, status: CiStatus, detail: object): void {
+    this.db.prepare('UPDATE jobs SET ci_status = ?, ci = ? WHERE id = ?').run(status, JSON.stringify(detail), id);
+  }
+
+  ciPending(): JobRow[] {
+    return this.db.prepare(`SELECT * FROM jobs WHERE ci_status = 'pending' ORDER BY finished_at`).all() as unknown as JobRow[];
   }
 
   finish(id: string, status: JobStatus, exitCode: number | null, result: string | null, error: string | null): void {
