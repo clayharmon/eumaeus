@@ -21,13 +21,22 @@ RUN npm install -g @anthropic-ai/claude-code @openai/codex \
 RUN usermod -l agent -d /home/agent -m node && groupmod -n agent node \
  && mkdir -p /work && chown agent:agent /work
 
+# Nix lives on the repo's disk, mounted at /nix (docs/m5-environments.md); scripts/disk.ts installs it there.
+# The image carries the installer's one missing dependency (xz), the config, and the PATH entry. sandbox = false:
+# single-user Nix in the VM reports "the prerequisite namespaces are not available" and builds unsandboxed anyway.
+RUN apt-get update && apt-get install -y --no-install-recommends xz-utils && rm -rf /var/lib/apt/lists/* \
+ && mkdir -m 0755 /nix && chown agent:agent /nix \
+ && mkdir -p /etc/nix && printf 'experimental-features = nix-command flakes\nsandbox = false\n' > /etc/nix/nix.conf
+ENV USER=agent NIX_SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+
 USER agent
 # Antigravity CLI installs itself into ~/.local/bin. The server gzips the script without a header.
 # Headless agy needs the Gemini API key provider selected in settings; the key arrives per job as GEMINI_API_KEY.
 RUN curl -fsSL --compressed https://antigravity.google/cli/install.sh | bash \
  && mkdir -p /home/agent/.gemini/antigravity-cli \
  && echo '{"modelProvider":"gemini"}' > /home/agent/.gemini/antigravity-cli/settings.json
-ENV PATH="/home/agent/.local/bin:${PATH}"
+# Last on PATH: the disk's tool profile (nix, devenv, devbox, mise) never shadows what the image ships.
+ENV PATH="/home/agent/.local/bin:${PATH}:/nix/var/nix/profiles/eumaeus/bin"
 # The repo commit this image was built from. scripts/build-image.sh passes it; job.sh logs it.
 ARG COMMIT=unknown
 ENV EUMAEUS_COMMIT=$COMMIT
