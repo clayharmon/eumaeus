@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Config } from './config.ts';
+import type { CredentialSource } from './credentials.ts';
 import { TERMINAL, type Db, type JobRow, type JobStatus } from './db.ts';
 import { JobProcess, removeVm, type RunOutcome } from './runner.ts';
 
@@ -22,10 +23,12 @@ export class Scheduler {
 
   private readonly db: Db;
   private readonly cfg: Config;
+  private readonly creds: CredentialSource;
 
-  constructor(db: Db, cfg: Config) {
+  constructor(db: Db, cfg: Config, creds: CredentialSource) {
     this.db = db;
     this.cfg = cfg;
+    this.creds = creds;
   }
 
   logPath(id: string): string { return join(this.cfg.dataDir, 'logs', `${id}.log`); }
@@ -60,7 +63,7 @@ export class Scheduler {
   }
 
   private async launch(job: JobRow): Promise<void> {
-    const proc = new JobProcess(job, this.cfg, this.logPath(job.id), this.envPath(job.id));
+    const proc = new JobProcess(job, this.cfg, this.creds, this.logPath(job.id), this.envPath(job.id));
     this.active.set(job.id, proc);
     this.timers.set(job.id, setTimeout(() => {
       this.db.finish(job.id, 'failed', null, null, `timeout after ${this.cfg.jobTimeoutMs / 60_000} min`);
