@@ -1,6 +1,6 @@
 # M5: per-repo environments
 
-Status: plan. Nothing below is built. Measurements are from a laptop on `container` 1.5.0.
+Status: plan. Nothing below is built. Measurements are from an Apple silicon Mac on `container` 1.5.0.
 
 ## A job can't run the checks it is asked to pass
 
@@ -47,7 +47,7 @@ and deleting 5,000 small files took:
 - A job that times out, is cancelled, or fails `setup` doesn't change what the next job on that repo starts
   from.
 - A repo that declares nothing runs as it does today.
-- Setup on the mini works over ssh, with no GUI step.
+- Setup on the host Mac works over ssh, with no GUI step.
 
 ## The model: two commands from the repo, one disk per repo
 
@@ -200,7 +200,7 @@ Fixtures live in a public repo, `eumaeus-fixtures`, with one branch per row of t
 the Rust and Postgres check below.
 
 1. **Base image.** Add `xz-utils`, `/etc/nix/nix.conf` with flakes enabled, `PATH` entries for the disk's
-   Nix profile, and a `/nix` mount point. Check: `pnpm smoke` passes.
+   Nix profile, and a `/nix` mount point. Check: `pnpm smoke <owner/repo>` passes.
 2. **Template disk.** `scripts/disk.sh template` builds `template.img`; `setup-mac.sh` calls it. Check: a VM
    on a clone of the template runs `nix run nixpkgs#hello` and `devenv version`. The same check settles whether
    the Nix build sandbox runs in a `container` VM; if it doesn't, `/etc/nix/nix.conf` sets `sandbox = false`.
@@ -228,13 +228,13 @@ Postgres:
 - Two jobs submitted together both reach `pushed`.
 - A job stopped by `cancel_job` leaves the golden disk's modification time unchanged.
 - A job whose agent exits non-zero after `setup` updates it.
-- `pnpm smoke` passes against a repo that declares nothing.
+- `pnpm smoke <owner/repo>` passes against a repo that declares nothing.
 
 ## Not in M5
 
 - A repo image for packages Nix doesn't cover, planned for M6. `image = "<Dockerfile>"` would build on the
   job image through `ARG BASE` and `FROM $BASE`. A Dockerfile `FROM eumaeus-job:dev` with one `RUN` built in
-  31 s on the laptop, most of it starting the builder VM.
+  31 s, most of it starting the builder VM.
 - `devcontainer.json` features and Compose services, which assume Docker.
 - Garbage collection of disks or the Nix store.
 - Sharing a disk between repos.
