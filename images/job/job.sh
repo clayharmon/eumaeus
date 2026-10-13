@@ -22,10 +22,14 @@ OPEN_PR="${OPEN_PR:-1}"
 AGENT_SUMMARY=""
 COST_LINE=""
 USAGE=""
+SETUP_OK=""
 OUT=/work; { [ -d /out ] && [ -w /out ]; } && OUT=/out
+# /nix is the repo's disk when the dispatcher mounts one; the host clones it after exit, so flush it first.
+trap sync EXIT
 
 log() { printf '[job %s] %s\n' "$JOB_ID" "$*" >&2; }
-emit() { printf '{"job_id":"%s","status":"%s"%s%s}\n' "$JOB_ID" "$1" "${2:-}" "${USAGE:+,\"usage\":$USAGE}"; }
+# setup_ok tells the dispatcher this job's disk may become the repo's golden disk.
+emit() { printf '{"job_id":"%s","status":"%s"%s%s%s}\n' "$JOB_ID" "$1" "${2:-}" "${USAGE:+,\"usage\":$USAGE}" "${SETUP_OK:+,\"setup_ok\":true}"; }
 
 git config --global user.name  "${GIT_AUTHOR_NAME:-eumaeus}"
 git config --global user.email "${GIT_AUTHOR_EMAIL:-eumaeus@users.noreply.github.com}"
@@ -44,6 +48,7 @@ else
   git checkout -q -b "$BRANCH"
   UPSTREAM="origin/$BASE_BRANCH"
 fi
+SETUP_OK=1
 
 log "runner=$RUNNER model=${MODEL:-default}"
 need() { # need <error-code> VAR... : fail unless at least one VAR is non-empty

@@ -1,9 +1,10 @@
 import { randomBytes } from 'node:crypto';
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { appendFileSync, existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Config } from './config.ts';
 import type { CredentialSource } from './credentials.ts';
 import { TERMINAL, type Db, type JobRow, type JobStatus } from './db.ts';
+import { jobVolumes, removeVolume, type Disks } from './disks.ts';
 import { JobProcess, removeVm, type RunOutcome } from './runner.ts';
 
 export interface SubmitInput {
@@ -20,15 +21,19 @@ export interface SubmitInput {
 export class Scheduler {
   private readonly active = new Map<string, JobProcess>();
   private readonly timers = new Map<string, NodeJS.Timeout>();
+  /** Jobs stopped by cancel, timeout, or shutdown. Their disks are never promoted. */
+  private readonly killed = new Set<string>();
 
   private readonly db: Db;
   private readonly cfg: Config;
   private readonly creds: CredentialSource;
+  readonly disks: Disks;
 
-  constructor(db: Db, cfg: Config, creds: CredentialSource) {
+  constructor(db: Db, cfg: Config, creds: CredentialSource, disks: Disks) {
     this.db = db;
     this.cfg = cfg;
     this.creds = creds;
+    this.disks = disks;
   }
 
   logPath(id: string): string { return join(this.cfg.dataDir, 'logs', `${id}.log`); }
@@ -68,27 +73,51 @@ export class Scheduler {
   }
 
   private async launch(job: JobRow): Promise<void> {
-    const proc = new JobProcess(job, this.cfg, this.creds, this.logPath(job.id), this.envPath(job.id), this.outDir(job.id));
+    const proc = new JobProcess(job, this.cfg, this.creds, this.disks, this.logPath(job.id), this.envPath(job.id), this.outDir(job.id));
     this.active.set(job.id, proc);
     this.timers.set(job.id, setTimeout(() => {
+      this.killed.add(job.id);
       this.db.finish(job.id, 'failed', null, null, `timeout after ${this.cfg.jobTimeoutMs / 60_000} min`);
       void proc.cancel();
     }, this.cfg.jobTimeoutMs));
 
-    try {
-      const out = await proc.run();
-      const current = this.db.get(job.id);
-      // cancel() and the timeout write their own terminal status first; don't overwrite it.
-      if (current && !TERMINAL.has(current.status)) {
-        this.db.finish(job.id, statusFor(out), out.exitCode, out.result ? JSON.stringify(out.result) : null, errorFor(out));
-      }
-    } finally {
-      clearTimeout(this.timers.get(job.id));
-      this.timers.delete(job.id);
-      this.active.delete(job.id);
-      await removeVm(job.id);
-      this.pump();
+    const out = await proc.run().catch((e: unknown): RunOutcome =>
+      ({ exitCode: null, signal: null, result: { status: 'failed', error: `dispatcher error: ${e instanceof Error ? e.message : String(e)}` } }));
+    clearTimeout(this.timers.get(job.id));
+    this.timers.delete(job.id);
+    // The VM must be gone before its volume is cloned or removed. The disk is settled before the job reads as
+    // finished, so a job submitted the moment this one finishes clones the promoted disk.
+    await removeVm(job.id);
+    await this.settleDisk(job, proc, out);
+    const current = this.db.get(job.id);
+    // cancel() and the timeout write their own terminal status first; don't overwrite it.
+    if (current && !TERMINAL.has(current.status)) {
+      this.db.finish(job.id, statusFor(out), out.exitCode, out.result ? JSON.stringify(out.result) : null, errorFor(out));
     }
+    this.killed.delete(job.id);
+    this.active.delete(job.id);
+    this.pump();
+  }
+
+  /** Promote the job's disk when its setup worked and nothing killed it; always remove the volume. Never throws. */
+  private async settleDisk(job: JobRow, proc: JobProcess, out: RunOutcome): Promise<void> {
+    const volume = proc.disk?.volume;
+    if (!volume) return;
+    let note: string;
+    if (this.killed.has(job.id)) note = 'discarded: the job was cancelled, timed out, or shut down';
+    else if (out.result?.['setup_ok'] !== true) note = 'discarded: setup did not finish';
+    else {
+      try {
+        await this.disks.promote(volume, job.repo);
+        note = `promoted to ${this.disks.golden(job.repo)}`;
+      } catch (e) {
+        note = `promote failed: ${e instanceof Error ? e.message : String(e)}`;
+      }
+    }
+    await removeVolume(volume);
+    try {
+      appendFileSync(this.logPath(job.id), `[dispatcher] ${new Date().toISOString()} disk ${note}\n`);
+    } catch { /* the log is best effort */ }
   }
 
   async cancel(id: string): Promise<JobRow | undefined> {
@@ -97,24 +126,28 @@ export class Scheduler {
     if (job.status === 'queued') {
       this.db.finish(id, 'cancelled', null, null, 'cancelled while queued');
     } else if (job.status === 'running') {
+      this.killed.add(id);
       this.db.finish(id, 'cancelled', null, null, 'cancelled by user');
       await this.active.get(id)?.cancel();
     }
     return this.db.get(id);
   }
 
-  /** Jobs left 'running' by a previous process are dead. Record that and remove their VMs. */
+  /** Jobs left 'running' by a previous process are dead. Record that and remove their VMs and volumes. */
   async recover(): Promise<number> {
     const ids = this.db.idsWithStatus('running');
     for (const id of ids) {
       this.db.finish(id, 'failed', null, null, 'dispatcher restarted while job was running');
       await removeVm(id);
     }
+    // No job is active yet, so every job volume belongs to a dead job.
+    for (const v of await jobVolumes()) await removeVolume(v);
     return ids.length;
   }
 
   async shutdown(): Promise<void> {
     for (const [id, proc] of this.active) {
+      this.killed.add(id);
       this.db.finish(id, 'failed', null, null, 'dispatcher shut down');
       await proc.cancel();
     }

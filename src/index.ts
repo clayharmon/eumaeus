@@ -1,8 +1,9 @@
-import { mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { config } from './config.ts';
 import { pickCredentials } from './credentials.ts';
 import { Db } from './db.ts';
+import { Disks } from './disks.ts';
 import { startHttp } from './http.ts';
 import { Scheduler } from './jobs.ts';
 import { dispatcherCommit, imageCommit } from './version.ts';
@@ -12,7 +13,8 @@ const log = (s: string): void => console.error(`[eumaeus] ${new Date().toISOStri
 mkdirSync(join(config.dataDir, 'logs'), { recursive: true });
 const db = new Db(config.dataDir);
 const creds = pickCredentials(config.githubAppFile, config.ghUser);
-const sched = new Scheduler(db, config, creds);
+const disks = new Disks(config);
+const sched = new Scheduler(db, config, creds, disks);
 log(`git identity: ${creds.describe}`);
 if (creds.describe.startsWith('gh-cli')) log(`no GitHub App at ${config.githubAppFile}; run: node scripts/github-app-setup.ts`);
 
@@ -21,6 +23,7 @@ if (recovered) log(`marked ${recovered} orphaned running job(s) failed`);
 log(`data=${config.dataDir} image=${config.image} max_concurrent=${config.maxConcurrent} per_job=${config.cpus}cpu/${config.memory}`);
 log(`commit=${dispatcherCommit() ?? 'unknown'} image_commit=${(await imageCommit(config.image)) ?? 'unknown'}`);
 if (sched.paused()) log(`paused: queued jobs wait until ${sched.pauseFile} is removed`);
+log(existsSync(disks.template) ? `disk template: ${disks.template}` : `disk template missing; jobs run with no disk until: node scripts/disk.ts template`);
 
 const http = startHttp(config, sched, db, creds, log);
 sched.pump();

@@ -4,6 +4,7 @@ import { dirname } from 'node:path';
 import type { Config } from './config.ts';
 import type { CredentialSource } from './credentials.ts';
 import type { JobRow } from './db.ts';
+import type { Disks, PreparedDisk } from './disks.ts';
 
 export interface RunOutcome {
   exitCode: number | null;
@@ -35,6 +36,8 @@ export async function removeVm(jobId: string): Promise<void> {
  */
 export class JobProcess {
   readonly name: string;
+  /** Set by run(): the volume mounted at /nix, or why there is none. */
+  disk: PreparedDisk | null = null;
   private child: ChildProcess | null = null;
   private readonly job: JobRow;
   private readonly cfg: Config;
@@ -42,11 +45,13 @@ export class JobProcess {
   private readonly envPath: string;
   private readonly outDir: string;
   private readonly creds: CredentialSource;
+  private readonly disks: Disks;
 
-  constructor(job: JobRow, cfg: Config, creds: CredentialSource, logPath: string, envPath: string, outDir: string) {
+  constructor(job: JobRow, cfg: Config, creds: CredentialSource, disks: Disks, logPath: string, envPath: string, outDir: string) {
     this.job = job;
     this.cfg = cfg;
     this.creds = creds;
+    this.disks = disks;
     this.logPath = logPath;
     this.envPath = envPath;
     this.outDir = outDir;
@@ -69,6 +74,11 @@ export class JobProcess {
       log.end();
       return { exitCode: null, signal: null, result: { status: 'failed', error: msg } };
     }
+    const disk = await this.disks.prepare(j.id, j.repo);
+    this.disk = disk;
+    log.write(disk.volume !== null
+      ? `[dispatcher] disk: ${disk.source} clone as volume ${disk.volume}\n`
+      : `[dispatcher] disk: none (${disk.reason})\n`);
     const args = [
       'run', '--rm', '--progress', 'none', '--name', this.name,
       '--cpus', String(j.cpus), '--memory', j.memory,
@@ -79,6 +89,7 @@ export class JobProcess {
       '--env-file', this.envPath,
       // Bind mount: the agent's transcript lands here and outlives the VM.
       '-v', `${this.outDir}:/out`,
+      ...(disk.volume !== null ? ['-v', `${disk.volume}:/nix`] : []),
       this.cfg.image,
     ];
     return this.spawnVm(args, log);
