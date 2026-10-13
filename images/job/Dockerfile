@@ -21,9 +21,6 @@ RUN npm install -g @anthropic-ai/claude-code @openai/codex \
 RUN usermod -l agent -d /home/agent -m node && groupmod -n agent node \
  && mkdir -p /work && chown agent:agent /work
 
-COPY job.sh /usr/local/bin/job
-RUN chmod 0755 /usr/local/bin/job
-
 USER agent
 # Antigravity CLI installs itself into ~/.local/bin. The server gzips the script without a header.
 # Headless agy needs the Gemini API key provider selected in settings; the key arrives per job as GEMINI_API_KEY.
@@ -31,5 +28,7 @@ RUN curl -fsSL --compressed https://antigravity.google/cli/install.sh | bash \
  && mkdir -p /home/agent/.gemini/antigravity-cli \
  && echo '{"modelProvider":"gemini"}' > /home/agent/.gemini/antigravity-cli/settings.json
 ENV PATH="/home/agent/.local/bin:${PATH}"
+# Last: job.sh changes often and must not invalidate the layers above.
+COPY --chmod=0755 job.sh /usr/local/bin/job
 WORKDIR /work
 ENTRYPOINT ["/usr/local/bin/job"]

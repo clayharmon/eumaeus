@@ -19,7 +19,7 @@ to the one repo. Four runners: Claude Code, Codex CLI, Antigravity CLI, pi.
 ## MCP tools
 
 `submit_job(repo, task, runner?, model?, base_branch?, branch?, cpus?, memory?)`, `job_status(job_id)`,
-`job_logs(job_id, tail?)`, `cancel_job(job_id)`, `list_jobs(status?, limit?)`, `merge_pr(repo, number, method?, delete_branch?)`.
+`job_logs(job_id, tail?)` (live: `claude` and `codex` write one `[agent]` line per tool call and message), `cancel_job(job_id)`, `list_jobs(status?, limit?)`, `merge_pr(repo, number, method?, delete_branch?)`.
 Job statuses: `queued`, `running`, `pushed`, `no_changes`, `failed`, `cancelled`.
 
 Pass `branch=` to continue an existing PR: the VM checks that branch out instead of starting a new one, and pushes
@@ -32,7 +32,7 @@ Register with Claude Code once: `claude mcp add -s user -t http eumaeus http://1
 
 | `runner` | CLI in the VM | Needs in `secrets.env` | `model` |
 |---|---|---|---|
-| `claude` | `claude -p --output-format json --dangerously-skip-permissions` | `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY` | Anthropic model id |
+| `claude` | `claude -p --output-format stream-json --verbose --dangerously-skip-permissions` | `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY` | Anthropic model id |
 | `codex` | `codex exec --json --sandbox danger-full-access --ephemeral` | `OPENAI_API_KEY` (or `CODEX_API_KEY`) | OpenAI model id |
 | `antigravity` | `agy -p --output-format json --dangerously-skip-permissions` | `GEMINI_API_KEY` | Gemini model id |
 | `pi` | `pi -p --no-session --no-approve` | any provider key, e.g. `OPENROUTER_API_KEY` | `provider/id` or fuzzy, e.g. `sonnet` |
@@ -118,7 +118,7 @@ Secrets for the agent go in `~/.config/eumaeus/secrets.env` (`ANTHROPIC_API_KEY=
 - Each job gets a GitHub App installation token scoped to its repo, valid one hour. The app is installed on
   all repos of the account; narrow that on the app's settings page if you want.
 - Secrets reach the VM through a `0600` env file that exists only while the job runs. The task text is on argv.
-- The PR body carries the task, the agent's own summary, runner, model, cost, and turn count.
+- The PR body carries the task, the agent's own summary, runner, cost, and turn count. For `claude` it names the model actually used (`modelUsage`), which is Sonnet 5.5 when `model` is left empty.
 - Antigravity in the VM uses the Gemini API key provider only (no Google account login inside a VM).
 - `/mcp` requires the bearer token from `dispatcher.env`; `/healthz` is open. The dispatcher binds to localhost
   only; the tailnet sees it through `tailscale serve`, which is tailnet-only (no Funnel).
