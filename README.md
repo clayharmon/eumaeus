@@ -85,7 +85,12 @@ How the disk carries over:
 Limits:
 
 - A job can leave anything on its repo's disk, including a modified tool, and the next job on that repo runs with it. Disks never cross repos. `reset_cache(repo)` deletes a repo's disk; its next job starts from the template.
-- Disks only grow. Nothing collects the Nix store's garbage.
+- A disk only grows while it lives: ext4 doesn't hand freed blocks back to the sparse file. Three rules delete disks instead, each turned off by setting it to 0:
+  - Before a job, its repo's disk is reset when it holds more than `EUMAEUS_DISK_MAX_GB` (40) on the host.
+  - Before a job, while the Mac has less than `EUMAEUS_DISK_FREE_GB` (15) free, the biggest disks are reset first.
+  - Once a day, disks no job has started on for `EUMAEUS_DISK_IDLE_DAYS` (30) are deleted.
+
+  A reset disk's next job starts from the template, so it runs cold once. `node scripts/disk.ts ls` shows each disk's size and last job. The template is rebuilt by `update.sh` when eumaeus pins a new Nix version.
 - Cloning relies on `container` 1.5 storing a volume as one image file on the host. That is not a documented interface. If it changes, jobs run without a disk and the log says why.
 - Nix runs single-user without its build sandbox; the VM lacks the namespaces the sandbox needs.
 
@@ -157,6 +162,7 @@ The launchd agent reads env vars from `~/.config/eumaeus/dispatcher.env`. Defaul
 | `EUMAEUS_IMAGE` | `eumaeus-job:dev` |
 | `EUMAEUS_CI_FIX` | `1` follow-up job per pushed job when its CI fails; `0` watches only |
 | `EUMAEUS_CI_TIMEOUT_MIN` | `60` |
+| `EUMAEUS_DISK_MAX_GB`, `EUMAEUS_DISK_FREE_GB`, `EUMAEUS_DISK_IDLE_DAYS` | `40`, `15`, `30`; see [Environments](#environments) |
 | `EUMAEUS_DISK_SIZE` | `64G` per repo disk; the image file is sparse, so it takes only what jobs write |
 
 ## Development
@@ -165,7 +171,7 @@ The launchd agent reads env vars from `~/.config/eumaeus/dispatcher.env`. Defaul
 - `scripts/service.sh install|status|logs|restart|uninstall` manages the launchd agent. Logs go to `~/Library/Logs/eumaeus/`.
 - `scripts/run-job.sh <owner/repo> "<task>" [runner] [model]` runs one job by hand, without the dispatcher.
 - `scripts/build-image.sh [image]` builds the job image with the checkout's commit stamped into it.
-- `node scripts/disk.ts template|ls|reset <owner/name>` builds the template disk, lists disks, or deletes one.
+- `node scripts/disk.ts template [--if-stale]|ls|reset <owner/name>` builds the template disk, lists disks with free space and the limits, or deletes one.
 - [`clayharmon/eumaeus-fixtures`](https://github.com/clayharmon/eumaeus-fixtures) has one branch per environment file, used to test them.
 - `images/job/job.sh` is everything that runs inside the VM.
 

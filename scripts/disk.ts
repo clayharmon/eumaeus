@@ -1,10 +1,11 @@
 // Per-repo disks (docs/m5-environments.md).
-// Usage: node scripts/disk.ts template [--if-missing] # build the template disk: Nix, devenv, devbox, mise, Flox
-//        node scripts/disk.ts ls                    # disks on the host, with the space each one holds
+// Usage: node scripts/disk.ts template [--if-stale] # build the template disk: Nix, devenv, devbox, mise, Flox;
+//                                                   # --if-stale skips it unless it is missing or its Nix is not NIX_VERSION
+//        node scripts/disk.ts ls                    # disks on the host, free space, and the limits
 //        node scripts/disk.ts reset <owner/name>    # delete a repo's golden disk
 // Reads ~/.config/eumaeus/dispatcher.env first (without overriding the environment), like the launchd agent does.
 import { spawn } from 'node:child_process';
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
@@ -56,6 +57,7 @@ async function buildTemplate(): Promise<void> {
     mkdirSync(disks.dir, { recursive: true });
     await sh('cp', ['-c', src, `${disks.template}.tmp`]);
     renameSync(`${disks.template}.tmp`, disks.template);
+    writeFileSync(marker(), JSON.stringify({ nix_version: NIX_VERSION, built_at: new Date().toISOString() }) + '\n');
     console.log(`template: ${disks.template}`);
   } finally {
     // container 1.5 honors --rm only on exit 0.
@@ -64,25 +66,41 @@ async function buildTemplate(): Promise<void> {
   }
 }
 
-function list(): void {
-  const dir = new Disks(config).dir;
-  if (!existsSync(dir)) { console.log(`no disks in ${dir}`); return; }
-  for (const f of readdirSync(dir).filter((f) => f.endsWith('.img')).sort()) {
-    const st = statSync(join(dir, f));
-    // Blocks shared between APFS clones count once per file here.
-    console.log(`${(st.blocks * 512 / 2 ** 30).toFixed(1).padStart(6)} GiB  ${st.mtime.toISOString()}  ${f}`);
+/** Records the Nix version the template was built with, so `--if-stale` can tell when to rebuild it. */
+const marker = (): string => join(new Disks(config).dir, 'template.json');
+
+/** Why the template needs building, or null when it is current. A template from before the marker counts as current. */
+function stale(): string | null {
+  const disks = new Disks(config);
+  if (!existsSync(disks.template)) return 'missing';
+  if (!existsSync(marker())) {
+    writeFileSync(marker(), JSON.stringify({ nix_version: NIX_VERSION, built_at: statSync(disks.template).mtime.toISOString() }) + '\n');
+    return null;
   }
+  const built = (JSON.parse(readFileSync(marker(), 'utf8')) as { nix_version?: string }).nix_version;
+  return built === NIX_VERSION ? null : `built with Nix ${built}, want ${NIX_VERSION}`;
+}
+
+function list(): void {
+  const disks = new Disks(config);
+  const g = (n: number): string => `${(n / 2 ** 30).toFixed(1).padStart(6)} GB`;
+  // Blocks shared between APFS clones count in full for each file, so the column can add up past what is used.
+  for (const d of disks.list()) console.log(`${g(d.bytes)}  last job ${d.used.toISOString().slice(0, 16)}  ${d.repo}`);
+  if (existsSync(disks.template)) console.log(`${g(statSync(disks.template).blocks * 512)}  template`);
+  console.log(`free on the Mac: ${g(disks.freeBytes()).trim()}; reset over ${g(config.diskMaxBytes).trim()}, ` +
+    `below ${g(config.diskFreeBytes).trim()} free, or after ${config.diskIdleMs / 86_400_000} idle days`);
 }
 
 const [cmd, arg] = process.argv.slice(2);
 if (cmd === 'template') {
-  if (arg === '--if-missing' && existsSync(new Disks(config).template)) console.log(`template: ${new Disks(config).template} (exists)`);
-  else await buildTemplate();
+  const why = arg === '--if-stale' || arg === '--if-missing' ? stale() : 'asked';
+  if (why === null) console.log(`template: ${new Disks(config).template} (current)`);
+  else { console.log(`building the template (${why})`); await buildTemplate(); }
 } else if (cmd === 'ls') {
   list();
 } else if (cmd === 'reset' && arg && /^[\w.-]+\/[\w.-]+$/.test(arg)) {
   console.log(new Disks(config).reset(arg) ? `deleted the golden disk for ${arg}` : `${arg} has no golden disk`);
 } else {
-  console.error('usage: node scripts/disk.ts template [--if-missing] | ls | reset <owner/name>');
+  console.error('usage: node scripts/disk.ts template [--if-stale] | ls | reset <owner/name>');
   process.exit(2);
 }

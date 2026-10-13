@@ -36,7 +36,7 @@ scripts/build-image.sh
 
 step "template disk"
 # Nix plus devenv, devbox, mise, and Flox, cloned for each repo's first job. About 70 s and 2.4 GB the first time.
-node scripts/disk.ts template --if-missing
+node scripts/disk.ts template --if-stale
 
 step "secrets"
 for f in secrets.env github-app.json; do

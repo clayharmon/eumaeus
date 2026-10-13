@@ -52,7 +52,7 @@ fi
 
 step "job image"
 scripts/build-image.sh
-node scripts/disk.ts template --if-missing
+node scripts/disk.ts template --if-stale
 
 step "restart"
 # Restart before lifting the pause: the old process must not start a queued job the restart would kill.

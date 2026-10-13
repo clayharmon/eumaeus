@@ -27,6 +27,12 @@ export const config = {
   jobTimeoutMs: Number(env('EUMAEUS_JOB_TIMEOUT_MIN', '60')) * 60_000,
   /** Size of each per-repo disk. The image file is sparse: it takes host space only for what jobs write. */
   diskSize: env('EUMAEUS_DISK_SIZE', '64G'),
+  /** A repo's disk holding more than this on the host is reset before its next job. 0 = no cap. */
+  diskMaxBytes: Number(env('EUMAEUS_DISK_MAX_GB', '40')) * 2 ** 30,
+  /** While the Mac has less free than this, the biggest disks are reset before a job. 0 = no floor. */
+  diskFreeBytes: Number(env('EUMAEUS_DISK_FREE_GB', '15')) * 2 ** 30,
+  /** Disks no job has started on for this long are deleted, checked daily. 0 = never. */
+  diskIdleMs: Number(env('EUMAEUS_DISK_IDLE_DAYS', '30')) * 86_400_000,
   /** Follow-up jobs a pushed job may start when its CI fails (src/ci.ts). 0 watches and records only. */
   ciFix: Number(env('EUMAEUS_CI_FIX', '1')),
   /** Stop watching a commit's checks after this long and record `timeout`. */

@@ -31,6 +31,9 @@ sched.pump();
 // Picks up queued jobs after the pause file is removed; submit and job exit pump on their own.
 setInterval(() => sched.pump(), 5_000).unref();
 new CiWatcher(db, sched, creds, config, log).start();
+const sweep = (): void => { for (const n of disks.sweepIdle()) log(`disk ${n}`); };
+sweep();
+setInterval(sweep, 86_400_000).unref();
 
 let stopping = false;
 async function stop(signal: string): Promise<void> {

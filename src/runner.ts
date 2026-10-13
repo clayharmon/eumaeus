@@ -92,6 +92,7 @@ export class JobProcess {
     }
     const disk = await this.disks.prepare(j.id, j.repo);
     this.disk = disk;
+    for (const n of disk.notes) log.write(`[dispatcher] disk: ${n}\n`);
     log.write(disk.volume !== null
       ? `[dispatcher] disk: ${disk.source} clone as volume ${disk.volume}\n`
       : `[dispatcher] disk: none (${disk.reason})\n`);
