@@ -3,9 +3,10 @@
 Self-hosted agent harness. Jobs run one per disposable VM on a Mac (Apple `container`),
 clone a repo, run a coding agent, push a branch.
 
-Status: M2. A dispatcher queues jobs, runs up to `EUMAEUS_MAX_CONCURRENT` (default 2) VMs at once, and exposes
+Status: M3. A dispatcher queues jobs, runs up to `EUMAEUS_MAX_CONCURRENT` (default 2) VMs at once, and exposes
 MCP tools over HTTP on `127.0.0.1:7777`. Jobs push and open PRs as a GitHub App bot with a one-hour token scoped
-to the one repo. No tailnet bind yet, not a launchd service yet.
+to the one repo. Four runners: Claude Code, Codex CLI, Antigravity CLI, pi. No tailnet bind yet, not a launchd
+service yet.
 
 ## Layout
 
@@ -26,6 +27,20 @@ to it. `merge_pr` merges as the bot and refuses while GitHub reports a conflict;
 "merge main and resolve" clears that.
 
 Register with Claude Code once: `claude mcp add -s user -t http eumaeus http://127.0.0.1:7777/mcp`.
+
+## Runners
+
+| `runner` | CLI in the VM | Needs in `secrets.env` | `model` |
+|---|---|---|---|
+| `claude` | `claude -p --output-format json --dangerously-skip-permissions` | `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY` | Anthropic model id |
+| `codex` | `codex exec --json --sandbox danger-full-access --ephemeral` | `OPENAI_API_KEY` (or `CODEX_API_KEY`) | OpenAI model id |
+| `antigravity` | `agy -p --output-format json --dangerously-skip-permissions` | `GEMINI_API_KEY` | Gemini model id |
+| `pi` | `pi -p --no-session --no-approve` | any provider key, e.g. `OPENROUTER_API_KEY` | `provider/id` or fuzzy, e.g. `sonnet` |
+| `shell` | `bash -c "$TASK"` | nothing | ignored |
+
+`submit_job` refuses up front when the runner's key is missing from the secrets file, so no VM is spent on it.
+Permission bypass is on for every runner because the VM is disposable and holds only a repo-scoped token.
+Cost is logged for `claude` (dollars) and as token counts for `codex` and `antigravity`; pi's print mode reports none.
 
 ## GitHub App (one time)
 
@@ -66,6 +81,6 @@ Secrets for the agent go in `~/.config/eumaeus/secrets.env` (`ANTHROPIC_API_KEY=
   all repos of the account; narrow that on the app's settings page if you want.
 - Secrets reach the VM through a `0600` env file that exists only while the job runs. The task text is on argv.
 - The PR body carries the task, the agent's own summary, runner, model, cost, and turn count.
-- Runner `claude` only (`shell` for testing). `codex`, `antigravity`, `pi` arrive in M3.
+- Antigravity in the VM uses the Gemini API key provider only (no Google account login inside a VM).
 - `/mcp` has no auth unless `EUMAEUS_AUTH_TOKEN` is set, so it binds to localhost. M4 adds the tailnet.
 - Jobs time out after 60 minutes. A dispatcher restart marks in-flight jobs `failed` and removes their VMs.

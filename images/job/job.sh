@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # Runs inside the job VM. Clone, run the agent, commit, push one branch.
 # Required env: JOB_ID, REPO (owner/name), TASK, GH_TOKEN.
-# Optional env: BASE_BRANCH (main), BRANCH (job/$JOB_ID), RUNNER (claude|shell), MODEL,
+# Optional env: BASE_BRANCH (main), BRANCH (job/$JOB_ID), RUNNER (claude|codex|antigravity|pi|shell), MODEL,
 #   GIT_AUTHOR_NAME/GIT_AUTHOR_EMAIL (commit identity), OPEN_PR (1 = open a pull request after push).
-# Runner "claude" also needs ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN.
+# Runner credentials: claude ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN; codex OPENAI_API_KEY or CODEX_API_KEY;
+#   antigravity GEMINI_API_KEY; pi any provider key, e.g. ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY, OPENROUTER_API_KEY.
 # stdout: one JSON line with the outcome. stderr: progress.
 set -euo pipefail
 
@@ -38,27 +39,66 @@ else
 fi
 
 log "runner=$RUNNER model=${MODEL:-default}"
-case "$RUNNER" in
-  claude)
-    if [ -z "${ANTHROPIC_API_KEY:-}" ] && [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then
-      log "runner=claude needs ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN"
-      emit failed ',"error":"no_anthropic_credentials"'; exit 3
-    fi
-    args=(-p --output-format json --dangerously-skip-permissions)
-    [ -n "$MODEL" ] && args+=(--model "$MODEL")
-    claude "${args[@]}" "$TASK" > /work/runner.json
-    AGENT_SUMMARY="$(jq -r '.result // ""' /work/runner.json | head -c 4000)"
-    COST_LINE="cost_usd=$(jq -r '.total_cost_usd // "?"' /work/runner.json) turns=$(jq -r '.num_turns // "?"' /work/runner.json)"
-    log "agent: $(printf '%s' "$AGENT_SUMMARY" | head -c 2000)"
-    log "$COST_LINE"
-    ;;
-  shell)
-    bash -c "$TASK"
-    ;;
-  *)
-    log "unknown runner: $RUNNER"; emit failed ',"error":"unknown_runner"'; exit 2
-    ;;
-esac
+need() { # need <error-code> VAR... : fail unless at least one VAR is non-empty
+  local code="$1"; shift
+  for v in "$@"; do [ -n "${!v:-}" ] && return 0; done
+  log "runner=$RUNNER needs one of: $*"; emit failed ",\"error\":\"$code\""; exit 3
+}
+model_arg() { [ -n "$MODEL" ] && printf '%s' "$MODEL"; }
+
+run_agent() {
+  case "$RUNNER" in
+    claude)
+      need no_anthropic_credentials ANTHROPIC_API_KEY CLAUDE_CODE_OAUTH_TOKEN
+      local args=(-p --output-format json --dangerously-skip-permissions)
+      [ -n "$MODEL" ] && args+=(--model "$MODEL")
+      claude "${args[@]}" "$TASK" > /work/runner.json || return $?
+      AGENT_SUMMARY="$(jq -r '.result // ""' /work/runner.json | head -c 4000)"
+      COST_LINE="cost_usd=$(jq -r '.total_cost_usd // "?"' /work/runner.json) turns=$(jq -r '.num_turns // "?"' /work/runner.json)"
+      ;;
+    codex)
+      need no_openai_credentials CODEX_API_KEY OPENAI_API_KEY
+      export CODEX_API_KEY="${CODEX_API_KEY:-$OPENAI_API_KEY}"
+      local args=(exec --json --sandbox danger-full-access --skip-git-repo-check --ephemeral -o /work/codex-last.md)
+      [ -n "$MODEL" ] && args+=(-m "$MODEL")
+      codex "${args[@]}" "$TASK" > /work/runner.jsonl || return $?
+      AGENT_SUMMARY="$(head -c 4000 /work/codex-last.md 2>/dev/null || true)"
+      COST_LINE="$(jq -r 'select(.type=="turn.completed") | .usage | "tokens in=\(.input_tokens) cached=\(.cached_input_tokens // 0) out=\(.output_tokens)"' /work/runner.jsonl | tail -1)"
+      ;;
+    antigravity)
+      need no_gemini_credentials GEMINI_API_KEY
+      local args=(-p --output-format json --dangerously-skip-permissions)
+      [ -n "$MODEL" ] && args+=(--model "$MODEL")
+      agy "${args[@]}" "$TASK" > /work/runner.json || return $?
+      [ "$(jq -r '.status // ""' /work/runner.json)" = "SUCCESS" ] || { log "agy status: $(jq -c '{status, error}' /work/runner.json)"; return 5; }
+      AGENT_SUMMARY="$(jq -r '.response // ""' /work/runner.json | head -c 4000)"
+      COST_LINE="tokens in=$(jq -r '.usage.input_tokens // "?"' /work/runner.json) out=$(jq -r '.usage.output_tokens // "?"' /work/runner.json) turns=$(jq -r '.num_turns // "?"' /work/runner.json)"
+      ;;
+    pi)
+      need no_provider_credentials ANTHROPIC_API_KEY OPENAI_API_KEY GEMINI_API_KEY OPENROUTER_API_KEY XAI_API_KEY GROQ_API_KEY MISTRAL_API_KEY
+      local args=(-p --no-session --no-approve)
+      [ -n "$MODEL" ] && args+=(--model "$MODEL")
+      pi "${args[@]}" "$TASK" > /work/runner.txt || return $?
+      AGENT_SUMMARY="$(tail -c 4000 /work/runner.txt)"
+      COST_LINE="usage not reported by pi print mode"
+      ;;
+    shell)
+      bash -c "$TASK"
+      ;;
+    *)
+      log "unknown runner: $RUNNER"; emit failed ',"error":"unknown_runner"'; exit 2
+      ;;
+  esac
+}
+
+if ! run_agent; then
+  rc=$?
+  log "runner exited $rc"
+  emit failed ",\"error\":\"runner_exit_$rc\""
+  exit 4
+fi
+[ -n "$AGENT_SUMMARY" ] && log "agent: $(printf '%s' "$AGENT_SUMMARY" | head -c 2000)"
+[ -n "$COST_LINE" ] && log "$COST_LINE"
 
 # The agent may have committed itself (e.g. a merge). Commit anything it left in the tree, then
 # push only if HEAD moved past what the remote already has.

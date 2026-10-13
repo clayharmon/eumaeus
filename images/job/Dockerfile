@@ -1,5 +1,6 @@
 # eumaeus job image: one disposable VM per job.
-# Contents: Debian bookworm, Node 24, git, gh, ripgrep, jq, Claude Code.
+# Contents: Debian bookworm, Node 24, git, gh, ripgrep, jq, and four agents:
+# Claude Code (claude), Codex CLI (codex), Antigravity CLI (agy), pi.
 FROM node:24-bookworm-slim
 
 RUN apt-get update \
@@ -12,7 +13,9 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends gh \
  && rm -rf /var/lib/apt/lists/*
 
-RUN npm install -g @anthropic-ai/claude-code && npm cache clean --force
+RUN npm install -g @anthropic-ai/claude-code @openai/codex \
+ && npm install -g --ignore-scripts @earendil-works/pi-coding-agent \
+ && npm cache clean --force
 
 # The node image ships uid 1000 as "node"; rename it to "agent".
 RUN usermod -l agent -d /home/agent -m node && groupmod -n agent node \
@@ -22,5 +25,11 @@ COPY job.sh /usr/local/bin/job
 RUN chmod 0755 /usr/local/bin/job
 
 USER agent
+# Antigravity CLI installs itself into ~/.local/bin. The server gzips the script without a header.
+# Headless agy needs the Gemini API key provider selected in settings; the key arrives per job as GEMINI_API_KEY.
+RUN curl -fsSL --compressed https://antigravity.google/cli/install.sh | bash \
+ && mkdir -p /home/agent/.gemini/antigravity-cli \
+ && echo '{"modelProvider":"gemini"}' > /home/agent/.gemini/antigravity-cli/settings.json
+ENV PATH="/home/agent/.local/bin:${PATH}"
 WORKDIR /work
 ENTRYPOINT ["/usr/local/bin/job"]
