@@ -34,6 +34,10 @@ pnpm install --frozen-lockfile --silent
 step "job image"
 scripts/build-image.sh
 
+step "template disk"
+# Nix plus devenv, devbox, mise, and Flox, cloned for each repo's first job. About 70 s and 2.4 GB the first time.
+node scripts/disk.ts template --if-missing
+
 step "secrets"
 for f in secrets.env github-app.json; do
   if [ -f "$HOME/.config/eumaeus/$f" ]; then echo "ok   ~/.config/eumaeus/$f"; else echo "MISSING ~/.config/eumaeus/$f  (see Setup in README.md)"; fi

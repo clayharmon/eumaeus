@@ -25,6 +25,8 @@ export const config = {
   cpus: Number(env('EUMAEUS_CPUS', '4')),
   memory: env('EUMAEUS_MEMORY', '4G'),
   jobTimeoutMs: Number(env('EUMAEUS_JOB_TIMEOUT_MIN', '60')) * 60_000,
+  /** Size of each per-repo disk. The image file is sparse: it takes host space only for what jobs write. */
+  diskSize: env('EUMAEUS_DISK_SIZE', '64G'),
 } as const;
 
 export type Config = typeof config;
