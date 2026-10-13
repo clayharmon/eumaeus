@@ -1,13 +1,24 @@
 // End-to-end check against a running dispatcher: list tools, submit a shell job, poll to completion.
 // Usage: node scripts/mcp-smoke.ts [url] [owner/repo]
+// Sends `Authorization: Bearer $EUMAEUS_AUTH_TOKEN`, read from the env or ~/.config/eumaeus/dispatcher.env.
+import { existsSync, readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 
 const url = process.argv[2] ?? 'http://127.0.0.1:7777/mcp';
 const repo = process.argv[3] ?? 'clayharmon/eumaeus';
 
+function authToken(): string | undefined {
+  if (process.env['EUMAEUS_AUTH_TOKEN']) return process.env['EUMAEUS_AUTH_TOKEN'];
+  const f = `${homedir()}/.config/eumaeus/dispatcher.env`;
+  if (!existsSync(f)) return undefined;
+  return /^EUMAEUS_AUTH_TOKEN=(.+)$/m.exec(readFileSync(f, 'utf8'))?.[1]?.trim();
+}
+const token = authToken();
+
 const client = new Client({ name: 'eumaeus-smoke', version: '0.1.0' });
-await client.connect(new StreamableHTTPClientTransport(new URL(url)));
+await client.connect(new StreamableHTTPClientTransport(new URL(url), token ? { requestInit: { headers: { authorization: `Bearer ${token}` } } } : {}));
 
 const tools = await client.listTools();
 console.log('tools:', tools.tools.map((t) => t.name).join(', '));

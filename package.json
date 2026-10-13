@@ -11,7 +11,9 @@
     "dev": "node --disable-warning=ExperimentalWarning --watch src/index.ts",
     "start": "node --disable-warning=ExperimentalWarning src/index.ts",
     "typecheck": "tsc --noEmit",
-    "smoke": "node scripts/mcp-smoke.ts"
+    "smoke": "node scripts/mcp-smoke.ts",
+    "start:service": "scripts/dispatcher.sh",
+    "service": "scripts/service.sh"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.1",
