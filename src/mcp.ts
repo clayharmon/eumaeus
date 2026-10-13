@@ -32,7 +32,9 @@ export function buildMcpServer(sched: Scheduler, db: Db, creds: CredentialSource
         'Queue a coding task. A fresh VM clones <repo> at <base_branch>, runs the agent on <task>, commits, and pushes ' +
         'branch job/<id> and opens a PR. Pass branch= to continue an existing branch/PR instead (the VM checks it out ' +
         'and pushes to it). Returns at once with the job id; poll job_status. Be specific in the task: name files and ' +
-        'the expected outcome. Nothing from the VM survives except the pushed branch.',
+        'the expected outcome. The VM has the repo\'s environment from its devenv.nix, devbox.json, .flox, flake.nix, ' +
+        'mise.toml, or .eumaeus.toml (see job_status result.env). Only the pushed branch, the transcript, and the ' +
+        "repo's cached disk outlive the VM.",
       inputSchema: {
         repo: z.string().regex(/^[\w.-]+\/[\w.-]+$/).describe('GitHub repo as owner/name'),
         task: z.string().min(1).max(20_000).describe('Instructions for the agent'),
