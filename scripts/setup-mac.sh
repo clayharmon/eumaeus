@@ -19,8 +19,13 @@ step "container system"
 # stdin from /dev/null: a fresh install asks about the kernel on first start, and over ssh that prompt would read the script.
 container system start </dev/null >/dev/null 2>&1 || true
 container system status >/dev/null 2>&1 || { echo "container system did not start"; exit 1; }
-# Needs the API server running. Idempotent.
-container system kernel set --recommended </dev/null 2>&1 | tail -1
+# Needs the API server running. On a re-run it exits 1 with POSIX error 17 "File exists": the kernel is already in place.
+if ! out="$(container system kernel set --recommended </dev/null 2>&1)"; then
+  case "$out" in
+    *'"File exists"'*) echo "kernel already installed" ;;
+    *) printf '%s\n' "$out" | tail -1; exit 1 ;;
+  esac
+fi
 echo "running"
 
 step "dependencies"
