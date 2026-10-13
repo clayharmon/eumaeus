@@ -16,10 +16,11 @@ command -v pnpm >/dev/null || { echo "pnpm not found (mise install?)"; exit 1; }
 echo "container $(container --version | awk '{print $4}') / node $(node --version) / pnpm $(pnpm --version)"
 
 step "container system"
-# Kernel first: a fresh install prompts for one on first start, and that prompt would eat stdin over ssh.
-container system kernel set --recommended </dev/null >/dev/null 2>&1 || true
+# stdin from /dev/null: a fresh install asks about the kernel on first start, and over ssh that prompt would read the script.
 container system start </dev/null >/dev/null 2>&1 || true
 container system status >/dev/null 2>&1 || { echo "container system did not start"; exit 1; }
+# Needs the API server running. Idempotent.
+container system kernel set --recommended </dev/null 2>&1 | tail -1
 echo "running"
 
 step "dependencies"
