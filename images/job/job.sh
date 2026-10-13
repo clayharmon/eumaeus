@@ -25,9 +25,17 @@ git config --global init.defaultBranch main
 gh auth setup-git >/dev/null
 
 log "clone $REPO @ $BASE_BRANCH"
-git clone -q --depth 1 --branch "$BASE_BRANCH" "https://github.com/$REPO.git" /work/repo
+git clone -q --branch "$BASE_BRANCH" "https://github.com/$REPO.git" /work/repo
 cd /work/repo
-git checkout -q -b "$BRANCH"
+# Existing branch (e.g. a PR to iterate on): build on it. Otherwise start from the base.
+if git rev-parse -q --verify "origin/$BRANCH" >/dev/null; then
+  git checkout -q -b "$BRANCH" "origin/$BRANCH"
+  UPSTREAM="origin/$BRANCH"
+  log "checked out existing $BRANCH ($(git rev-parse --short HEAD)), $(git rev-list --count "origin/$BASE_BRANCH..HEAD") commit(s) ahead of $BASE_BRANCH"
+else
+  git checkout -q -b "$BRANCH"
+  UPSTREAM="origin/$BASE_BRANCH"
+fi
 
 log "runner=$RUNNER model=${MODEL:-default}"
 case "$RUNNER" in
@@ -52,17 +60,23 @@ case "$RUNNER" in
     ;;
 esac
 
-if [ -z "$(git status --porcelain)" ]; then
+# The agent may have committed itself (e.g. a merge). Commit anything it left in the tree, then
+# push only if HEAD moved past what the remote already has.
+if [ -n "$(git status --porcelain)" ]; then
+  git add -A
+  git commit -q -m "eumaeus job $JOB_ID" -m "$TASK"
+fi
+NEW_COMMITS="$(git rev-list --count "$UPSTREAM..HEAD")"
+if [ "$NEW_COMMITS" = 0 ]; then
   log "no changes"; emit no_changes; exit 0
 fi
-
-git add -A
-git commit -q -m "eumaeus job $JOB_ID" -m "$TASK"
 git push -q -u origin "$BRANCH"
-log "pushed $BRANCH"
+log "pushed $BRANCH ($NEW_COMMITS new commit(s))"
 
 PR_URL=""
-if [ "$OPEN_PR" = "1" ]; then
+if [ "$OPEN_PR" = "1" ] && PR_URL="$(gh pr view "$BRANCH" --repo "$REPO" --json url -q .url 2>/dev/null)" && [ -n "$PR_URL" ]; then
+  log "pr already open: $PR_URL"
+elif [ "$OPEN_PR" = "1" ]; then
   title="$(printf '%s' "$TASK" | head -n1 | cut -c1-72)"
   # shellcheck disable=SC2016  # backticks are literal markdown
   body="$(printf '%s\n\n## Task\n\n%s\n\n## Agent summary\n\n%s\n\n## Run\n\n- job: `%s`\n- runner: %s\n- model: %s\n- %s\n' \
@@ -74,6 +88,7 @@ if [ "$OPEN_PR" = "1" ]; then
   fi
 fi
 
-extra=",\"branch\":\"$BRANCH\",\"commit\":\"$(git rev-parse HEAD)\",\"files\":$(git diff --name-only HEAD~1 | jq -R . | jq -sc .)"
+# Files the branch changes relative to the base (three-dot), so a merge from base doesn't list base's files.
+extra=",\"branch\":\"$BRANCH\",\"commit\":\"$(git rev-parse HEAD)\",\"files\":$(git diff --name-only "origin/$BASE_BRANCH...HEAD" | jq -R . | jq -sc .)"
 [ -n "$PR_URL" ] && extra="$extra,\"pr_url\":\"$PR_URL\""
 emit pushed "$extra"

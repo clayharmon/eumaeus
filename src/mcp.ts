@@ -1,7 +1,9 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
+import type { CredentialSource } from './credentials.ts';
 import { JOB_STATUSES, type Db, type JobRow } from './db.ts';
 import type { Scheduler } from './jobs.ts';
+import { mergePr } from './prs.ts';
 
 const text = (v: unknown): { content: { type: 'text'; text: string }[] } => ({
   content: [{ type: 'text', text: typeof v === 'string' ? v : JSON.stringify(v, null, 2) }],
@@ -18,7 +20,7 @@ function view(j: JobRow): Record<string, unknown> {
   };
 }
 
-export function buildMcpServer(sched: Scheduler, db: Db): McpServer {
+export function buildMcpServer(sched: Scheduler, db: Db, creds: CredentialSource): McpServer {
   const server = new McpServer({ name: 'eumaeus', version: '0.1.0' });
 
   server.registerTool(
@@ -27,14 +29,16 @@ export function buildMcpServer(sched: Scheduler, db: Db): McpServer {
       title: 'Submit a job',
       description:
         'Queue a coding task. A fresh VM clones <repo> at <base_branch>, runs the agent on <task>, commits, and pushes ' +
-        'branch job/<id>. Returns at once with the job id; poll job_status. Be specific in the task: name files and the ' +
-        'expected outcome. Nothing from the VM survives except the pushed branch.',
+        'branch job/<id> and opens a PR. Pass branch= to continue an existing branch/PR instead (the VM checks it out ' +
+        'and pushes to it). Returns at once with the job id; poll job_status. Be specific in the task: name files and ' +
+        'the expected outcome. Nothing from the VM survives except the pushed branch.',
       inputSchema: {
         repo: z.string().regex(/^[\w.-]+\/[\w.-]+$/).describe('GitHub repo as owner/name'),
         task: z.string().min(1).max(20_000).describe('Instructions for the agent'),
         runner: z.enum(['claude', 'shell']).default('claude').describe('claude = Claude Code headless; shell = run task as bash (testing)'),
         model: z.string().optional().describe('Model override passed to the runner'),
         base_branch: z.string().default('main'),
+        branch: z.string().optional().describe('Existing branch to continue (e.g. a PR head). Default: new job/<id>'),
         cpus: z.number().int().min(1).max(8).optional(),
         memory: z.string().regex(/^\d+[MG]$/).optional().describe('e.g. 4G'),
       },
@@ -67,6 +71,29 @@ export function buildMcpServer(sched: Scheduler, db: Db): McpServer {
     async ({ job_id }) => {
       const j = await sched.cancel(job_id);
       return text(j ? view(j) : { error: 'not found', job_id });
+    },
+  );
+
+  server.registerTool(
+    'merge_pr',
+    {
+      title: 'Merge a pull request',
+      description:
+        'Merge a PR as the bot. Refuses when GitHub reports it not mergeable; then submit a job with branch=<pr head> ' +
+        'whose task is to merge the base branch and resolve conflicts, and call this again.',
+      inputSchema: {
+        repo: z.string().regex(/^[\w.-]+\/[\w.-]+$/),
+        number: z.number().int().positive(),
+        method: z.enum(['squash', 'merge', 'rebase']).default('squash'),
+        delete_branch: z.boolean().default(true),
+      },
+    },
+    async ({ repo, number, method, delete_branch }) => {
+      try {
+        return text(await mergePr(creds, repo, number, method, delete_branch));
+      } catch (e) {
+        return text({ merged: false, error: e instanceof Error ? e.message : String(e) });
+      }
     },
   );
 
