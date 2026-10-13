@@ -19,7 +19,7 @@ const recovered = await sched.recover();
 if (recovered) log(`marked ${recovered} orphaned running job(s) failed`);
 log(`data=${config.dataDir} image=${config.image} max_concurrent=${config.maxConcurrent} per_job=${config.cpus}cpu/${config.memory}`);
 
-const http = startHttp(config, sched, db, log);
+const http = startHttp(config, sched, db, creds, log);
 sched.pump();
 
 let stopping = false;

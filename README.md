@@ -17,8 +17,13 @@ to the one repo. No tailnet bind yet, not a launchd service yet.
 
 ## MCP tools
 
-`submit_job(repo, task, runner?, model?, base_branch?, cpus?, memory?)`, `job_status(job_id)`, `job_logs(job_id, tail?)`,
-`cancel_job(job_id)`, `list_jobs(status?, limit?)`. Job statuses: `queued`, `running`, `pushed`, `no_changes`, `failed`, `cancelled`.
+`submit_job(repo, task, runner?, model?, base_branch?, branch?, cpus?, memory?)`, `job_status(job_id)`,
+`job_logs(job_id, tail?)`, `cancel_job(job_id)`, `list_jobs(status?, limit?)`, `merge_pr(repo, number, method?, delete_branch?)`.
+Job statuses: `queued`, `running`, `pushed`, `no_changes`, `failed`, `cancelled`.
+
+Pass `branch=` to continue an existing PR: the VM checks that branch out instead of starting a new one, and pushes
+to it. `merge_pr` merges as the bot and refuses while GitHub reports a conflict; a job on the PR branch whose task is
+"merge main and resolve" clears that.
 
 Register with Claude Code once: `claude mcp add -s user -t http eumaeus http://127.0.0.1:7777/mcp`.
 
