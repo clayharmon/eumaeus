@@ -233,7 +233,7 @@ Postgres:
 
 ## Not in M5
 
-- A repo image for packages Nix doesn't cover, planned for M6. `image = "<Dockerfile>"` would build on the
+- A repo image for packages Nix doesn't cover, built later as M6 (README, "Environments"). `image = "<Dockerfile>"` would build on the
   job image through `ARG BASE` and `FROM $BASE`. A Dockerfile `FROM eumaeus-job:dev` with one `RUN` built in
   31 s, most of it starting the builder VM.
 - `devcontainer.json` features and Compose services, which assume Docker.

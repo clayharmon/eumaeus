@@ -5,7 +5,8 @@ import type { Config } from './config.ts';
 import type { CredentialSource, GitIdentity } from './credentials.ts';
 import type { JobRow } from './db.ts';
 import type { Disks, PreparedDisk } from './disks.ts';
-import { envArgs, readEnvToml, type EnvToml } from './envfile.ts';
+import { envArgs, readEnvToml, readRepoFile, type EnvToml } from './envfile.ts';
+import { repoImage } from './images.ts';
 
 export interface RunOutcome {
   exitCode: number | null;
@@ -39,6 +40,8 @@ export class JobProcess {
   readonly name: string;
   /** Set by run(): the volume mounted at /nix, or why there is none. */
   disk: PreparedDisk | null = null;
+  /** Set by run() when .eumaeus.toml names a Dockerfile: the repo image the VM boots. */
+  image: string | null = null;
   private child: ChildProcess | null = null;
   private readonly job: JobRow;
   private readonly cfg: Config;
@@ -79,10 +82,18 @@ export class JobProcess {
     }
     // A job on its own new branch reads the base; one continuing a branch reads that branch, then the base.
     const refs = j.branch === `job/${j.id}` ? [j.base_branch] : [j.branch, j.base_branch];
-    let toml: EnvToml | null;
+    let toml: EnvToml | null = null;
+    let image = this.cfg.image;
     try {
-      toml = await readEnvToml(j.repo, refs, token);
+      const found = await readEnvToml(j.repo, refs, token);
+      toml = found?.toml ?? null;
       log.write(`[dispatcher] .eumaeus.toml: ${toml ? JSON.stringify(toml) : 'none'}\n`);
+      if (found && toml?.image) {
+        const dockerfile = await readRepoFile(j.repo, found.ref, toml.image, token);
+        if (dockerfile === null) throw new Error(`.eumaeus.toml image: ${toml.image} not found at ${found.ref}`);
+        image = await repoImage(this.cfg, j.repo, dockerfile, (s) => log.write(`[dispatcher] ${s}\n`));
+        this.image = image;
+      }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       log.write(`[dispatcher] ${msg}\n`);
@@ -108,7 +119,7 @@ export class JobProcess {
       // Bind mount: the agent's transcript lands here and outlives the VM.
       '-v', `${this.outDir}:/out`,
       ...(disk.volume !== null ? ['-v', `${disk.volume}:/nix`] : []),
-      this.cfg.image,
+      image,
     ];
     return this.spawnVm(args, log);
   }

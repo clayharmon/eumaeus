@@ -70,7 +70,20 @@ A detected file is best effort. eumaeus runs its setup, then its prefix once wit
 setup = "nix develop -c bash scripts/pg-start.sh"   # runs once, before the agent
 shell = "nix develop -c"                            # prefix on the agent command
 cache = ["target", "~/.cargo"]                      # repo paths or ~/ paths kept on the disk
+image = ".eumaeus/Dockerfile"                       # optional: apt packages, see below
 ```
+
+A repo that needs packages from apt can name a Dockerfile with `image`. It has to build on the job image and hand back to the agent user:
+
+```dockerfile
+ARG BASE
+FROM $BASE
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends figlet && rm -rf /var/lib/apt/lists/*
+USER agent
+```
+
+The dispatcher builds it before the VM boots, with that one file as the whole build context, so `COPY` from the repo doesn't work. The tag hashes the Dockerfile and the job image, so the image is rebuilt only when one of them changes; a one-package build took 20 s, and a later job reused it. Each repo keeps its 3 most recently used images. A Dockerfile that doesn't start `FROM $BASE` fails the job before building, and one that ends as root fails it with `runs_as_root`. `result.env.image` names the image a job booted.
 
 `~/.cache` and `~/.local/share` are always kept, which covers mise's installs. A cache path in the repo is added to `.git/info/exclude`, so it is never committed.
 

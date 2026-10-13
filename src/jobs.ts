@@ -101,6 +101,7 @@ export class Scheduler {
         ...(typeof env === 'object' && env !== null ? env : {}),
         disk: proc.disk.volume !== null ? proc.disk.source : 'none',
         promoted,
+        ...(proc.image ? { image: proc.image } : {}),
       };
     }
     const current = this.db.get(job.id);

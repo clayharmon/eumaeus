@@ -41,6 +41,11 @@ emit() {
   printf '{"job_id":"%s","status":"%s"%s}\n' "$JOB_ID" "$1" "$extra"
 }
 
+# A repo image (.eumaeus.toml `image`) builds on this one; it has to hand back to the agent user.
+if [ "$(id -u)" = 0 ]; then
+  log "running as root; a repo Dockerfile must end with USER agent"; emit failed ',"error":"runs_as_root"'; exit 2
+fi
+
 git config --global user.name  "${GIT_AUTHOR_NAME:-eumaeus}"
 git config --global user.email "${GIT_AUTHOR_EMAIL:-eumaeus@users.noreply.github.com}"
 git config --global init.defaultBranch main
