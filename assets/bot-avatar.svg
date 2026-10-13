@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1c2129"/>
+      <stop offset="1" stop-color="#0c0e12"/>
+    </linearGradient>
+    <radialGradient id="halo" cx="0.5" cy="0.52" r="0.5">
+      <stop offset="0" stop-color="#5fe1ff" stop-opacity="0.16"/>
+      <stop offset="0.6" stop-color="#5fe1ff" stop-opacity="0.04"/>
+      <stop offset="1" stop-color="#5fe1ff" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="glow" x="-100%" y="-100%" width="300%" height="300%">
+      <feGaussianBlur stdDeviation="14" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+
+  <rect width="1024" height="1024" rx="180" fill="url(#bg)"/>
+  <circle cx="512" cy="530" r="400" fill="url(#halo)"/>
+
+  <g transform="translate(512,512) scale(1.14) translate(-602,-457)">
+    <!-- mane bristles -->
+    <polygon fill="#8a4518" points="300,470 315,395 352,415 372,335 405,365 428,282 455,322 470,300 380,360"/>
+    <!-- ear -->
+    <polygon fill="#8a4518" points="470,300 505,215 590,305"/>
+    <polygon fill="#d9843a" points="492,300 512,245 565,305"/>
+    <!-- head mass -->
+    <polygon fill="#d9843a" points="300,470 380,360 470,300 600,310 720,400 800,460 900,540 905,625 850,655 740,700 560,720 400,660 320,580"/>
+    <!-- dark facets: back of head, lower jaw, snout disc -->
+    <polygon fill="#a8551f" points="300,470 380,360 400,470 320,580"/>
+    <polygon fill="#a8551f" points="400,660 560,660 740,650 850,655 740,700 560,720"/>
+    <polygon fill="#a8551f" points="900,540 905,625 880,630 876,548"/>
+    <!-- light facets: forehead, snout ridge -->
+    <polygon fill="#f2b35a" points="470,300 600,310 720,400 650,470 520,430"/>
+    <polygon fill="#f2b35a" points="720,400 800,460 900,540 830,560 720,490"/>
+    <!-- mouth -->
+    <path d="M 790,662 Q 850,658 880,642" fill="none" stroke="#6b3210" stroke-width="8" stroke-linecap="round"/>
+    <!-- nostril -->
+    <ellipse cx="889" cy="590" rx="9" ry="16" fill="#5a2a0d"/>
+    <!-- tusk: crescent off the lower jaw, pointing up -->
+    <path d="M 796,682 C 866,686 900,640 886,560 L 854,568 C 866,628 846,656 794,658 Z" fill="#f4ecd8"/>
+    <!-- eye: a glowing cursor block -->
+    <rect x="658" y="458" width="44" height="44" rx="5" fill="#5fe1ff" transform="rotate(45 680 480)" filter="url(#glow)"/>
+    <rect x="673" y="473" width="14" height="14" rx="3" fill="#ffffff" opacity="0.9" transform="rotate(45 680 480)"/>
+  </g>
+</svg>
