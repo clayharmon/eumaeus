@@ -44,7 +44,7 @@ export function buildMcpServer(sched: Scheduler, db: Db, creds: CredentialSource
           'claude = Claude Code; codex = OpenAI Codex CLI; antigravity = Google agy; pi = pi (any provider, give model as provider/id); shell = run task as bash (testing)'),
         model: z.string().optional().describe('Model override. claude/codex/antigravity: vendor model id. pi: provider/model or a fuzzy name like "sonnet"'),
         base_branch: z.string().default('main'),
-        branch: z.string().optional().describe('Existing branch to continue (e.g. a PR head). Default: new job/<id>'),
+        branch: z.string().optional().describe('Branch to push. An existing branch (e.g. a PR head) is checked out and continued; a new name is created from base_branch. Default: job/<id>'),
         cpus: z.number().int().min(1).max(8).optional(),
         memory: z.string().regex(/^\d+[MG]$/).optional().describe('e.g. 4G'),
         ci_fix: z.number().int().min(0).max(3).optional().describe(

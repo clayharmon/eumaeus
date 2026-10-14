@@ -134,7 +134,7 @@ The GitHub App needs read access to Checks, Commit statuses, and Actions. `node 
 
 | Tool | What it does |
 |---|---|
-| `submit_job(repo, task, runner?, model?, base_branch?, branch?, cpus?, memory?, ci_fix?)` | Queues a job. Pass `branch` to push to an existing PR branch, `ci_fix` to change how many follow-ups a CI failure may start. |
+| `submit_job(repo, task, runner?, model?, base_branch?, branch?, cpus?, memory?, ci_fix?)` | Queues a job. Pass `branch` to name the branch: an existing one, such as a PR head, is continued, and a new name is created from `base_branch`. Pass `ci_fix` to change how many follow-ups a CI failure may start. |
 | `job_status(job_id)` | Returns `queued`, `running`, `pushed`, `no_changes`, `failed`, or `cancelled`, plus the PR URL, `result.usage` (cost and turns for `claude`, token counts for `codex` and `antigravity`), and `ci` once pushed. |
 | `job_logs(job_id, tail?)` | Tails the log. `claude` and `codex` add one `[agent]` line per tool call as they run. |
 | `job_transcript(job_id, tail?, grep?)` | Returns the agent's own output stream, kept after the VM is gone. Use it to check what the agent actually ran. |
