@@ -52,7 +52,15 @@ git config --global init.defaultBranch main
 gh auth setup-git >/dev/null
 
 log "clone $REPO @ $BASE_BRANCH (image ${EUMAEUS_COMMIT:-unknown})"
-git clone -q --branch "$BASE_BRANCH" "https://github.com/$REPO.git" /work/repo
+# Three tries, 10 s apart: a VM that boots while the host's network is settling has lost a job in 2 s
+# on "Could not resolve host: github.com" three times in one day, each before any work was done.
+for attempt in 1 2 3; do
+  if git clone -q --branch "$BASE_BRANCH" "https://github.com/$REPO.git" /work/repo 2>/tmp/clone.err; then break; fi
+  rm -rf /work/repo
+  if [ "$attempt" = 3 ]; then cat /tmp/clone.err >&2; log "clone failed 3 times"; emit failed ',"error":"clone_failed"'; exit 2; fi
+  log "clone attempt $attempt failed: $(tr -d '\n' < /tmp/clone.err | cut -c1-200); retrying in 10 s"
+  sleep 10
+done
 cd /work/repo
 # Existing branch (e.g. a PR to iterate on): build on it. Otherwise start from the base.
 if git rev-parse -q --verify "origin/$BRANCH" >/dev/null; then
