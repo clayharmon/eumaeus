@@ -329,8 +329,9 @@ elif [ "$OPEN_PR" = "1" ]; then
   [ -n "$title" ] || title="$(printf '%s' "$TASK" | head -n1 | cut -c1-72)"
   if [ -n "$body" ]; then
     # shellcheck disable=SC2016  # backticks are literal markdown
-    run="$(printf '\n\n<details><summary>eumaeus run</summary>\n\n- job: `%s`\n- runner: %s\n- requested model: %s\n- %s\n\n<details><summary>Task</summary>\n\n%s\n\n</details>\n</details>\n' \
-      "$JOB_ID" "$RUNNER" "${MODEL:-default}" "${COST_LINE:-no cost data}" "$TASK")"
+    # The task stays out of the body: job_status holds it, and a squash merge copies the body into the commit.
+    run="$(printf '\n\n<details><summary>eumaeus run</summary>\n\n- job: `%s`\n- runner: %s\n- requested model: %s\n- %s\n\n</details>\n' \
+      "$JOB_ID" "$RUNNER" "${MODEL:-default}" "${COST_LINE:-no cost data}")"
   else
     # shellcheck disable=SC2016
     body="$(printf '%s\n\n## Task\n\n%s\n\n## Agent summary\n\n%s' \
