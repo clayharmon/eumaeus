@@ -37,6 +37,9 @@ export const config = {
   ciFix: Number(env('EUMAEUS_CI_FIX', '1')),
   /** Stop watching a commit's checks after this long and record `timeout`. */
   ciTimeoutMs: Number(env('EUMAEUS_CI_TIMEOUT_MIN', '60')) * 60_000,
+  /** GitHub logins whose labels and mentions start jobs (src/inbox.ts), lowercased. Empty turns the inbox off. */
+  inboxUsers: env('EUMAEUS_INBOX_USERS', '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean),
+  inboxPollMs: Number(env('EUMAEUS_INBOX_POLL_S', '60')) * 1000,
 } as const;
 
 export type Config = typeof config;

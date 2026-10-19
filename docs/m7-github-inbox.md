@@ -1,6 +1,6 @@
 # M7: work from the pull request
 
-Status: plan approved 2026-10-19; next is step 3. Browser measurements are from a spike on an Apple silicon Mac on
+Status: plan approved 2026-10-19; next is step 4. Browser measurements are from a spike on an Apple silicon Mac on
 `container` 1.5.0 with `@playwright/cli` 0.1.22.
 
 ## You review on GitHub, and eumaeus can't hear you there
@@ -370,3 +370,28 @@ What the build changed from the plan:
 - `claimNext` compares repos without regard to case, since GitHub doesn't.
 - When the branch is gone by the time CI fails, the watcher records `branch <name> no longer exists` and submits
   nothing. A fix would have recreated the branch from the base, without the failing commit.
+
+### Step 3: inbox loop
+
+| Check | Result |
+|---|---|
+| `/healthz` lists the fixtures repo | `inbox.repos` held 50 repos, `clayharmon/eumaeus-fixtures` among them |
+| An issue labeled before the inbox started starts nothing | #5, labeled at 15:32:47, 7 s before the start: no log line, no trigger, no job |
+| A label after the start is seen | #6, labeled at 15:34:41, logged as `label:33659735107` at 15:34:58 |
+| Two polls in a row return `304` and leave `x-ratelimit-remaining` unchanged | the polls at 15:34:00 and 15:34:17 were all `304`; remaining was 6362 of 6450 after each |
+
+What the build changed from the plan:
+
+- The app is installed on 50 repos, not 10. With 4 calls per repo per poll, the worst case at 60 s would be
+  12,000 requests an hour, plus reviews, against a limit of 6,450. Each repo's open-issue list, newest update first, is now
+  the only request in a quiet poll. Labels, comments, and reviews all change it, and only then does the poll read
+  the other endpoints. It keeps reading them for 60 s after, since one endpoint can show an event before another.
+  A quiet poll of 50 repos took 2.5 s and 50 requests, all `304`.
+- GitHub's ETags differ per token: the same request with a second token got a `200` and a new ETag. The inbox
+  keeps each installation token for 50 minutes, so a new token costs one `200` per repo.
+- `since=` in a URL is the cursor's hour, not the cursor, so the URL and its ETag stay the same between polls.
+  The cursor trails each poll by 60 s, and the `triggers` primary key drops what the overlap sees twice.
+- An ETag is stored, and the cursor moved, only when every request in that repo's poll succeeded.
+- Archived repos aren't polled.
+- `/healthz` `inbox` has `users`, `poll_s`, `repos`, `last_poll` (time, seconds, and a count per HTTP status),
+  `waiting`, `rate` per installation account, and `paused_until`. With the inbox off it is `{off: <reason>}`.

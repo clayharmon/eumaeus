@@ -3,6 +3,7 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import type { Config } from './config.ts';
 import type { CredentialSource } from './credentials.ts';
 import type { Db } from './db.ts';
+import type { Inbox } from './inbox.ts';
 import type { Scheduler } from './jobs.ts';
 import { buildMcpServer } from './mcp.ts';
 import { dispatcherCommit, imageCommit } from './version.ts';
@@ -36,7 +37,7 @@ function readJson(req: IncomingMessage): Promise<unknown> {
  * Stateless streamable-HTTP MCP endpoint: one McpServer + transport per request.
  * JSON responses (no SSE) keep it curl-friendly and proxy-friendly.
  */
-export function startHttp(cfg: Config, sched: Scheduler, db: Db, creds: CredentialSource, log: (s: string) => void): Server {
+export function startHttp(cfg: Config, sched: Scheduler, db: Db, creds: CredentialSource, inbox: Inbox, log: (s: string) => void): Server {
   const commit = dispatcherCommit();
   const server = createServer(async (req, res) => {
     const url = new URL(req.url ?? '/', 'http://localhost');
@@ -50,6 +51,7 @@ export function startHttp(cfg: Config, sched: Scheduler, db: Db, creds: Credenti
         commit,
         image: cfg.image,
         image_commit: await imageCommit(cfg.image),
+        inbox: inbox.status(),
       });
       return;
     }

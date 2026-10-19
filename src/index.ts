@@ -5,7 +5,9 @@ import { pickCredentials } from './credentials.ts';
 import { CiWatcher } from './ci.ts';
 import { Db } from './db.ts';
 import { Disks } from './disks.ts';
+import { GitHubApp, loadGitHubApp } from './github.ts';
 import { startHttp } from './http.ts';
+import { Inbox } from './inbox.ts';
 import { Scheduler } from './jobs.ts';
 import { dispatcherCommit, imageCommit } from './version.ts';
 
@@ -13,7 +15,9 @@ const log = (s: string): void => console.error(`[eumaeus] ${new Date().toISOStri
 
 mkdirSync(join(config.dataDir, 'logs'), { recursive: true });
 const db = new Db(config.dataDir);
-const creds = pickCredentials(config.githubAppFile, config.ghUser);
+const appCfg = loadGitHubApp(config.githubAppFile);
+const app = appCfg ? new GitHubApp(appCfg) : null;
+const creds = pickCredentials(app, config.ghUser);
 const disks = new Disks(config);
 const sched = new Scheduler(db, config, creds, disks);
 log(`git identity: ${creds.describe}`);
@@ -26,11 +30,13 @@ log(`commit=${dispatcherCommit() ?? 'unknown'} image_commit=${(await imageCommit
 if (sched.paused()) log(`paused: queued jobs wait until ${sched.pauseFile} is removed`);
 log(existsSync(disks.template) ? `disk template: ${disks.template}` : `disk template missing; jobs run with no disk until: node scripts/disk.ts template`);
 
-const http = startHttp(config, sched, db, creds, log);
+const inbox = new Inbox(db, sched, app, config, log);
+const http = startHttp(config, sched, db, creds, inbox, log);
 sched.pump();
 // Picks up queued jobs after the pause file is removed; submit and job exit pump on their own.
 setInterval(() => sched.pump(), 5_000).unref();
 new CiWatcher(db, sched, creds, config, log).start();
+inbox.start();
 const sweep = (): void => { for (const n of disks.sweepIdle()) log(`disk ${n}`); };
 sweep();
 setInterval(sweep, 86_400_000).unref();

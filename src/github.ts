@@ -38,6 +38,59 @@ export async function ghApi<T>(path: string, token: string | null, init: Request
   return (await r.json()) as T;
 }
 
+export interface RateLimit {
+  remaining: number;
+  limit: number;
+  /** Epoch milliseconds. */
+  reset: number;
+}
+
+/** GitHub refused for rate: the primary limit (remaining 0) or a secondary limit (retry-after). */
+export class RateLimited extends Error {
+  readonly until: number;
+  constructor(until: number, message: string) {
+    super(message);
+    this.until = until;
+  }
+}
+
+export interface Conditional<T> {
+  /** null on a 304: nothing changed since the ETag sent. */
+  body: T | null;
+  status: 200 | 304;
+  etag: string | null;
+  /** The rel="next" page, a full URL. */
+  next: string | null;
+  rate: RateLimit | null;
+}
+
+/**
+ * GET with If-None-Match. GitHub doesn't count a 304 against the rate limit, and its ETags differ per token,
+ * so a caller keeps one token for as long as it can. `path` is an API path or a full URL from a Link header.
+ */
+export async function ghGet<T>(path: string, token: string, etag: string | null = null): Promise<Conditional<T>> {
+  const headers: Record<string, string> = {
+    accept: 'application/vnd.github+json',
+    'x-github-api-version': '2022-11-28',
+    'user-agent': 'eumaeus',
+    authorization: `Bearer ${token}`,
+  };
+  if (etag) headers['if-none-match'] = etag;
+  const r = await fetch(path.startsWith('https://') ? path : `https://api.github.com${path}`, { headers });
+  const h = (k: string): number | null => (r.headers.has(k) ? Number(r.headers.get(k)) : null);
+  const remaining = h('x-ratelimit-remaining');
+  const rate = remaining === null ? null : { remaining, limit: h('x-ratelimit-limit') ?? 0, reset: (h('x-ratelimit-reset') ?? 0) * 1000 };
+  if (r.status === 304) return { body: null, status: 304, etag, next: null, rate };
+  if (r.status === 403 || r.status === 429) {
+    const retry = h('retry-after');
+    if (remaining === 0 && rate) throw new RateLimited(rate.reset, `rate limit spent until ${new Date(rate.reset).toISOString()}`);
+    if (retry !== null) throw new RateLimited(Date.now() + retry * 1000, `secondary rate limit, retry after ${retry} s`);
+  }
+  if (!r.ok) throw new Error(`GitHub GET ${path} -> ${r.status}: ${(await r.text()).slice(0, 300)}`);
+  const next = /<([^>]+)>;\s*rel="next"/.exec(r.headers.get('link') ?? '')?.[1] ?? null;
+  return { body: (await r.json()) as T, status: 200, etag: r.headers.get('etag'), next, rate };
+}
+
 export interface InstallationToken {
   token: string;
   expires_at: string;
@@ -77,6 +130,11 @@ export class GitHubApp {
       method: 'POST',
       body: JSON.stringify({ repositories: [repo] }),
     });
+  }
+
+  /** One-hour token for every repo of an installation. It stays in the dispatcher; src/inbox.ts polls with it. */
+  installationTokenAll(installationId: number): Promise<InstallationToken> {
+    return ghApi<InstallationToken>(`/app/installations/${installationId}/access_tokens`, appJwt(this.cfg), { method: 'POST' });
   }
 
   listInstallations(): Promise<{ id: number; account: { login: string; type: string }; repository_selection: string }[]> {

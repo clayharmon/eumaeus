@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { GitHubApp, loadGitHubApp } from './github.ts';
+import type { GitHubApp } from './github.ts';
 
 /** What a job VM needs to clone, push, and open a PR as some identity. */
 export interface GitIdentity {
@@ -47,7 +47,6 @@ export class GhCliCredentials implements CredentialSource {
   }
 }
 
-export function pickCredentials(appConfigPath: string, ghUser: string): CredentialSource {
-  const app = loadGitHubApp(appConfigPath);
-  return app ? new GitHubAppCredentials(new GitHubApp(app)) : new GhCliCredentials(ghUser);
+export function pickCredentials(app: GitHubApp | null, ghUser: string): CredentialSource {
+  return app ? new GitHubAppCredentials(app) : new GhCliCredentials(ghUser);
 }

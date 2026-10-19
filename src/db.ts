@@ -35,6 +35,27 @@ export interface JobRow {
   ci: string | null;
 }
 
+/** A GitHub event the inbox turned into a job or a reply (src/inbox.ts). One row per event, ever. */
+export interface TriggerRow {
+  /** label:<event id>, issue:<issue id>, comment:<comment id>, review-comment:<comment id>, or review:<review id>. */
+  id: string;
+  repo: string;
+  /** The issue or pull request number. */
+  number: number;
+  url: string;
+  login: string;
+  /** Null when the trigger only gets a reply, such as a mention on a fork's PR. */
+  job_id: string | null;
+  /** API paths: where 👀 and the outcome reaction go, and where the line is posted. */
+  react_path: string;
+  reply_path: string;
+  eyes_id: number | null;
+  /** Set when there is nothing to wait for; otherwise written from the job's outcome. */
+  reply: string | null;
+  created_at: string;
+  replied_at: string | null;
+}
+
 export type NewJob = Pick<JobRow, 'id' | 'repo' | 'task' | 'runner' | 'model' | 'base_branch' | 'branch' | 'cpus' | 'memory' | 'parent_id' | 'ci_fix'>;
 
 /** Columns added after M4; an older database gets them on open. */
@@ -69,6 +90,23 @@ export class Db {
         error TEXT
       );
       CREATE INDEX IF NOT EXISTS jobs_status_created ON jobs(status, created_at);
+      CREATE TABLE IF NOT EXISTS triggers (
+        id TEXT PRIMARY KEY,
+        repo TEXT NOT NULL,
+        number INTEGER NOT NULL,
+        url TEXT NOT NULL,
+        login TEXT NOT NULL,
+        job_id TEXT,
+        react_path TEXT NOT NULL,
+        reply_path TEXT NOT NULL,
+        eyes_id INTEGER,
+        reply TEXT,
+        created_at TEXT NOT NULL,
+        replied_at TEXT
+      );
+      CREATE INDEX IF NOT EXISTS triggers_job ON triggers(job_id);
+      -- since: events created at or before it are never triggers. A repo's first poll sets it to that moment.
+      CREATE TABLE IF NOT EXISTS inbox_cursors (repo TEXT PRIMARY KEY, since TEXT NOT NULL, polled_at TEXT);
     `);
     const have = new Set((this.db.prepare('PRAGMA table_info(jobs)').all() as { name: string }[]).map((c) => c.name));
     for (const [name, type] of Object.entries(ADDED_COLUMNS)) {
@@ -129,6 +167,21 @@ export class Db {
 
   ciPending(): JobRow[] {
     return this.db.prepare(`SELECT * FROM jobs WHERE ci_status = 'pending' ORDER BY finished_at`).all() as unknown as JobRow[];
+  }
+
+  inboxSince(repo: string): string | undefined {
+    return (this.db.prepare('SELECT since FROM inbox_cursors WHERE repo = ?').get(repo) as { since: string } | undefined)?.since;
+  }
+
+  setInboxCursor(repo: string, since: string, polledAt: string | null): void {
+    this.db
+      .prepare('INSERT INTO inbox_cursors (repo, since, polled_at) VALUES (?, ?, ?) ON CONFLICT(repo) DO UPDATE SET since = excluded.since, polled_at = excluded.polled_at')
+      .run(repo, since, polledAt);
+  }
+
+  /** Triggers whose reply hasn't been posted. */
+  unanswered(): TriggerRow[] {
+    return this.db.prepare('SELECT * FROM triggers WHERE replied_at IS NULL ORDER BY created_at').all() as unknown as TriggerRow[];
   }
 
   finish(id: string, status: JobStatus, exitCode: number | null, result: string | null, error: string | null): void {
