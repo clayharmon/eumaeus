@@ -2,6 +2,7 @@
 # Host side. Run one job in a fresh VM.
 # Usage: scripts/run-job.sh <owner/repo> "<task>" [runner] [model]
 # Env: JOB_ID, IMAGE (eumaeus-job:dev), CPUS (4), MEMORY (4G), GH_USER (gh's active account), OPEN_PR (1),
+#      BASE_BRANCH (job.sh's default, main),
 #      GH_TOKEN (default: gh auth token [-u $GH_USER]; the dispatcher uses a GitHub App token instead),
 #      EUMAEUS_SECRETS (~/.config/eumaeus/secrets.env, passed as --env-file if present).
 set -euo pipefail
@@ -15,6 +16,7 @@ GH_TOKEN="${GH_TOKEN:-$(gh auth token ${GH_USER:+-u "$GH_USER"})}"
 args=(run --rm --name "eumaeus-$JOB_ID" --cpus "${CPUS:-4}" --memory "${MEMORY:-4G}"
   -e "JOB_ID=$JOB_ID" -e "REPO=$REPO" -e "TASK=$TASK" -e "RUNNER=$RUNNER" -e "MODEL=$MODEL"
   -e "GH_TOKEN=$GH_TOKEN" -e "OPEN_PR=${OPEN_PR:-1}")
+[ -n "${BASE_BRANCH:-}" ] && args+=(-e "BASE_BRANCH=$BASE_BRANCH")
 [ -f "$SECRETS" ] && args+=(--env-file "$SECRETS")
 
 echo "job $JOB_ID -> $REPO runner=$RUNNER" >&2

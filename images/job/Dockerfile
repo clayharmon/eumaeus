@@ -1,5 +1,5 @@
 # eumaeus job image: one disposable VM per job.
-# Contents: Debian bookworm, Node 24, git, gh, ripgrep, jq, and four agents:
+# Contents: Debian bookworm, Node 24, git, gh, ripgrep, jq, Chromium with playwright-cli, and four agents:
 # Claude Code (claude), Codex CLI (codex), Antigravity CLI (agy), pi.
 FROM node:24-bookworm-slim
 
@@ -16,6 +16,19 @@ RUN apt-get update \
 RUN npm install -g @anthropic-ai/claude-code @openai/codex \
  && npm install -g --ignore-scripts @earendil-works/pi-coding-agent \
  && npm cache clean --force
+
+# A headless browser for every runner, driven from the shell (docs/m7-github-inbox.md). PLAYWRIGHT_BROWSERS_PATH
+# keeps Chromium in the image; under ~/.cache it would be copied onto every repo's disk. PLAYWRIGHT_MCP_BROWSER:
+# playwright-cli otherwise looks for Google Chrome. PLAYWRIGHT_MCP_OUTPUT_DIR: snapshots default to the working
+# directory, the repo, where job.sh's `git add -A` would commit them. --no-shell skips a 274 MB headless shell
+# the CLI doesn't use. Pinned, so update.sh rebuilds the same CLI until a commit changes it. procps: ps and pkill,
+# so an agent can stop the dev server it started for the browser.
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright PLAYWRIGHT_MCP_BROWSER=chromium \
+    PLAYWRIGHT_MCP_OUTPUT_DIR=/work/.playwright-cli
+RUN apt-get update && apt-get install -y --no-install-recommends procps \
+ && npm install -g @playwright/cli@0.1.22 && npm cache clean --force \
+ && node /usr/local/lib/node_modules/@playwright/cli/node_modules/playwright/cli.js install --with-deps --no-shell chromium \
+ && rm -rf /var/lib/apt/lists/*
 
 # The node image ships uid 1000 as "node"; rename it to "agent".
 RUN usermod -l agent -d /home/agent -m node && groupmod -n agent node \

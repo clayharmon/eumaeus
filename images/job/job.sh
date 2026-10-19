@@ -290,7 +290,9 @@ AGENT_TASK="$TASK"
 if [ "$RUNNER" != shell ]; then
   # `|| true`: find exits 1 when .github or docs is missing, and set -e would end the job here.
   PR_TEMPLATE="$(find . .github docs -maxdepth 1 -iname 'pull_request_template.md' 2>/dev/null | head -n1 | sed 's#^\./##' || true)"
-  handoff="When the work is done, write the pull request description to $PR_FILE: line 1 is the PR title (72 characters max), then a blank line, then the body in Markdown."
+  mkdir -p /work/screenshots
+  handoff="A headless Chromium is available through \`playwright-cli\`; run \`playwright-cli --help\`. If your change affects what a browser renders, start the app, check the page, and save up to 6 screenshots to /work/screenshots/."
+  handoff="$handoff When the work is done, write the pull request description to $PR_FILE: line 1 is the PR title (72 characters max), then a blank line, then the body in Markdown."
   [ -n "$PR_TEMPLATE" ] && handoff="$handoff The repository's PR template is at $PR_TEMPLATE; fill it in."
   handoff="$handoff $PR_FILE is outside the repository, so it is not committed. The harness pushes the branch and opens the pull request from that file unless one is already open."
   AGENT_TASK="$TASK"$'\n\n'"---"$'\n'"Hand-off from the eumaeus harness, not from the requester: $handoff"

@@ -1,6 +1,6 @@
 # M7: work from the pull request
 
-Status: plan approved 2026-10-19; next is step 1. Browser measurements are from a spike on an Apple silicon Mac on
+Status: plan approved 2026-10-19; next is step 2. Browser measurements are from a spike on an Apple silicon Mac on
 `container` 1.5.0 with `@playwright/cli` 0.1.22.
 
 ## You review on GitHub, and eumaeus can't hear you there
@@ -337,3 +337,22 @@ serves it on port 3000.
 - The inbox with the `gh` fallback identity.
 - GitLab and Bitbucket.
 - Video recording through `playwright-cli video-start`.
+
+## Results
+
+### Step 1: browser in the image
+
+| Check | Result |
+|---|---|
+| `shell` job opens example.com and takes a screenshot | job `20261019-145933-1fb3`, `no_changes`; `open` 1.6 s, `screenshot` 0.25 s, a 69,657-byte PNG |
+| `claude` job on `web` fixes the overflow | job `20261019-150234-e5a7`, Sonnet 5.5, 6 turns, $0.053; it ran `playwright-cli resize 375 700` and measured a scroll width of 375; PR #2, closed |
+| Neither job commits `.playwright-cli/` | `git status --porcelain --ignored` printed nothing; PR #2 changed only `index.html` |
+| VM start to the clone line, 3 runs each | 1.30, 1.32, 1.43 s on the image before (496.7 MB); 1.68, 1.44, 1.45 s after (817.3 MB). The first boot after a build took 2.71 s |
+
+What the build changed from the plan:
+
+- The image gains `procps`. Without `ps` and `pkill` the `web` agent couldn't stop the dev server it had started.
+  The image is 817.8 MB with it, and one open page measured 937 MB of Chromium RSS.
+- `job.sh` creates `/work/screenshots/` before an agent runner starts.
+- `scripts/run-job.sh` passes `BASE_BRANCH`, so a hand-run job can start from a fixture branch.
+- `build-image.sh` took 82 s, with every layer above the browser's cached.
