@@ -1,6 +1,6 @@
 # M7: work from the pull request
 
-Status: plan approved 2026-10-19; next is step 2. Browser measurements are from a spike on an Apple silicon Mac on
+Status: plan approved 2026-10-19; next is step 3. Browser measurements are from a spike on an Apple silicon Mac on
 `container` 1.5.0 with `@playwright/cli` 0.1.22.
 
 ## You review on GitHub, and eumaeus can't hear you there
@@ -356,3 +356,17 @@ What the build changed from the plan:
 - `job.sh` creates `/work/screenshots/` before an agent runner starts.
 - `scripts/run-job.sh` passes `BASE_BRANCH`, so a hand-run job can start from a fixture branch.
 - `build-image.sh` took 82 s, with every layer above the browser's cached.
+
+### Step 2: one job per branch
+
+| Check | Result |
+|---|---|
+| Two `shell` jobs submitted together on `m7-serial` both reach `pushed` | `20261019-150651-e1f8` ran 15:06:51.349 to 15:07:19.362; `20261019-150651-907b` started 1 ms later and checked out `0c59fe6`, the first job's push. Both on PR #3, closed |
+| A queued job on another branch goes ahead | of 3 jobs submitted in order (`m7-serial`, `m7-serial`, `m7-other`), the `m7-other` job started at 15:08:00.148 and the second `m7-serial` job at 15:08:15.112, when the first finished |
+| A CI failure on a moved head starts no fix | Haiku job `20261019-150850-1677` pushed `56044eb1` from `ci-check`; a hand push made `1929c29b`; the watcher recorded `failure` with `superseded by 1929c29b` and submitted nothing. PR #4, closed |
+
+What the build changed from the plan:
+
+- `claimNext` compares repos without regard to case, since GitHub doesn't.
+- When the branch is gone by the time CI fails, the watcher records `branch <name> no longer exists` and submits
+  nothing. A fix would have recreated the branch from the base, without the failing commit.

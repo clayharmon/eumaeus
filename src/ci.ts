@@ -138,8 +138,14 @@ export class CiWatcher {
     else if (left <= 0) note = 'no fix attempts left';
     else if (fixable.length === 0) note = `no failure an agent can act on (${failed.map((c) => c.conclusion).join(', ')})`;
     else {
-      followup = this.submitFix(job, d.sha, fixable, await this.failureText(job.repo, fixable, token)).id;
-      note = `follow-up job ${followup} (${left - 1} fix attempt(s) left after it)`;
+      // Someone pushed after this commit; a fix for the old commit would work on a head its task doesn't describe.
+      const head = await branchHead(job.repo, job.branch, token);
+      if (head === null) note = `branch ${job.branch} no longer exists`;
+      else if (head !== d.sha) note = `superseded by ${head.slice(0, 8)}`;
+      else {
+        followup = this.submitFix(job, d.sha, fixable, await this.failureText(job.repo, fixable, token)).id;
+        note = `follow-up job ${followup} (${left - 1} fix attempt(s) left after it)`;
+      }
     }
     this.settle(job, 'failure', { sha: d.sha, since: d.since, checks: summary, ...(followup ? { followup } : {}), note });
   }
@@ -216,6 +222,17 @@ export class CiWatcher {
     const { token } = await this.creds.identityFor(repo);
     this.tokens.set(repo, { token, until: Date.now() + TOKEN_TTL_MS });
     return token;
+  }
+}
+
+/** The commit a branch points at, or null when GitHub has no such branch. */
+async function branchHead(repo: string, branch: string, token: string): Promise<string | null> {
+  const ref = branch.split('/').map(encodeURIComponent).join('/');
+  try {
+    return (await ghApi<{ object: { sha: string } }>(`/repos/${repo}/git/ref/heads/${ref}`, token)).object.sha;
+  } catch (e) {
+    if (e instanceof Error && / -> 404: /.test(e.message)) return null;
+    throw e;
   }
 }
 

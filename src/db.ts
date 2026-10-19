@@ -97,11 +97,18 @@ export class Db {
     return rows as unknown as JobRow[];
   }
 
-  /** Move the oldest queued job to running. Single-process, synchronous, so this is atomic. */
+  /**
+   * Move the oldest queued job to running, skipping jobs whose branch a running job holds: two pushes to one branch
+   * at once fail the second as a non-fast-forward. Single-process, synchronous, so this is atomic.
+   */
   claimNext(): JobRow | undefined {
-    const row = this.db.prepare(`SELECT id FROM jobs WHERE status = 'queued' ORDER BY created_at LIMIT 1`).get() as
-      | { id: string }
-      | undefined;
+    const row = this.db
+      .prepare(
+        `SELECT q.id FROM jobs q WHERE q.status = 'queued' AND NOT EXISTS (
+           SELECT 1 FROM jobs r WHERE r.status = 'running' AND r.repo = q.repo COLLATE NOCASE AND r.branch = q.branch
+         ) ORDER BY q.created_at LIMIT 1`,
+      )
+      .get() as { id: string } | undefined;
     if (!row) return undefined;
     this.db.prepare(`UPDATE jobs SET status = 'running', started_at = ? WHERE id = ?`).run(now(), row.id);
     return this.get(row.id);
