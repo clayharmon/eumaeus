@@ -13,7 +13,8 @@
 # Runner credentials: claude ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN; codex OPENAI_API_KEY or CODEX_API_KEY;
 #   antigravity GEMINI_API_KEY; pi any provider key, e.g. ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY, OPENROUTER_API_KEY.
 # Output: the dispatcher mounts a host directory at /out; the agent's own output stream is written there and
-#   outlives the VM. Without /out (scripts/run-job.sh) it stays in /work.
+#   outlives the VM, and so does report.md, the agent's whole last message. Without /out (scripts/run-job.sh) they
+#   stay in /work.
 # Environment (docs/m5-environments.md): SETUP (runs before the agent), SHELL_PREFIX (wraps the agent), CACHE
 #   (newline-separated paths kept on the disk), EUMAEUS_TOML=1 when they came from the repo's .eumaeus.toml.
 #   An unset SETUP or SHELL_PREFIX falls back to the first environment file the repo has.
@@ -252,7 +253,8 @@ run_agent() {
       [ "$rc" -eq 0 ] || return "$rc"
       jq -cR 'fromjson? | select(.type == "result")' "$OUT/runner.jsonl" | tail -n 1 > /work/runner.json
       [ -s /work/runner.json ] || { log "claude exited 0 without a result event"; return 5; }
-      AGENT_SUMMARY="$(jq -r '.result // ""' /work/runner.json | head -c 4000)"
+      jq -rj '.result // ""' /work/runner.json > "$OUT/report.md"
+      AGENT_SUMMARY="$(head -c 4000 "$OUT/report.md")"
       COST_LINE="model=$(jq -r '(.modelUsage // {}) | keys | join("+") | if . == "" then "?" else . end' /work/runner.json) cost_usd=$(jq -r '.total_cost_usd // "?"' /work/runner.json) turns=$(jq -r '.num_turns // "?"' /work/runner.json)"
       ;;
     codex)
@@ -264,6 +266,7 @@ run_agent() {
       agent_cmd codex
       "${AGENT[@]}" "${args[@]}" "$AGENT_TASK" | tee "$OUT/runner.jsonl" | narrate_codex || rc=${PIPESTATUS[0]}
       [ "$rc" -eq 0 ] || return "$rc"
+      cp /work/codex-last.md "$OUT/report.md" 2>/dev/null || true
       AGENT_SUMMARY="$(head -c 4000 /work/codex-last.md 2>/dev/null || true)"
       COST_LINE="$(jq -r 'select(.type=="turn.completed") | .usage | "tokens in=\(.input_tokens) cached=\(.cached_input_tokens // 0) out=\(.output_tokens)"' "$OUT/runner.jsonl" | tail -1)"
       ;;
@@ -274,7 +277,8 @@ run_agent() {
       agent_cmd agy
       "${AGENT[@]}" "${args[@]}" "$AGENT_TASK" > "$OUT/runner.json" || return $?
       [ "$(jq -r '.status // ""' "$OUT/runner.json")" = "SUCCESS" ] || { log "agy status: $(jq -c '{status, error}' "$OUT/runner.json")"; return 5; }
-      AGENT_SUMMARY="$(jq -r '.response // ""' "$OUT/runner.json" | head -c 4000)"
+      jq -rj '.response // ""' "$OUT/runner.json" > "$OUT/report.md"
+      AGENT_SUMMARY="$(head -c 4000 "$OUT/report.md")"
       COST_LINE="tokens in=$(jq -r '.usage.input_tokens // "?"' "$OUT/runner.json") out=$(jq -r '.usage.output_tokens // "?"' "$OUT/runner.json") turns=$(jq -r '.num_turns // "?"' "$OUT/runner.json")"
       ;;
     pi)
@@ -283,6 +287,7 @@ run_agent() {
       [ -n "$MODEL" ] && args+=(--model "$MODEL")
       agent_cmd pi
       "${AGENT[@]}" "${args[@]}" "$AGENT_TASK" > "$OUT/runner.txt" || return $?
+      cp "$OUT/runner.txt" "$OUT/report.md"
       AGENT_SUMMARY="$(tail -c 4000 "$OUT/runner.txt")"
       COST_LINE="usage not reported by pi print mode"
       ;;

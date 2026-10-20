@@ -1,6 +1,6 @@
 # M8: a queue nobody watches
 
-Status: steps 1 to 5 built, with step 5's hermesmoney numbers pending a run on the mini; steps 6 to 8 planned. Evidence is from the 33 hermesmoney jobs of 2026-10-20, ids `20261020-002321-1929`
+Status: steps 1 to 6 built, with step 5's hermesmoney numbers pending a run on the mini; steps 7 and 8 planned. Evidence is from the 33 hermesmoney jobs of 2026-10-20, ids `20261020-002321-1929`
 to `20261020-004138-2a54`, read with `job_status`, `job_logs`, and `job_transcript`.
 
 ## The wave loop queues 33 jobs at night and fixes their output by hand in the morning
@@ -441,3 +441,15 @@ What the build changed from the plan:
 - The sampler starts before the root check, so a job that fails at once still reports a peak.
 - `mem_total_mb` for a `4G` VM is 4,047 MB: what the kernel sees after its own reservations.
 - The sampler is a bash loop around `awk` on `/proc/meminfo`; it writes the file only when the peak grows.
+
+### Step 6: the whole report
+
+| Check | Result |
+|---|---|
+| A `claude` job asked to end with a numbered list of 6,000 or more characters: `report`'s length equals the length of `.result` in the transcript, and the log line is still 2,000 characters | job `20261020-154500-79c3`, Haiku 5.5, 1 turn, $0.006, 39 s in the agent. `job_status` `report` was 9,058 characters, `out/<id>/report.md` 9,058, and `.result` in `runner.jsonl` 9,058. The log's `agent:` text was 2,000 characters. `list_jobs` has no `report` key |
+
+What the build changed from the plan:
+
+- `AGENT_SUMMARY` for `claude` and `antigravity` is now the first 4,000 characters of `report.md`, read once, rather
+  than a second `jq` pass; the fallback PR body and the log line are unchanged.
+- `job_transcript`'s description points at `report` for the whole last message.

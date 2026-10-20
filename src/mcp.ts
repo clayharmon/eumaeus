@@ -113,7 +113,7 @@ export function buildMcpServer(
     {
       title: 'Job status',
       description:
-        'Current state of one job: its result JSON (every result has peak_mem_mb, the most memory the VM used, sampled ' +
+        'Current state of one job: `report`, the agent\'s whole last message, uncut (list_jobs leaves it out); its result JSON (every result has peak_mem_mb, the most memory the VM used, sampled ' +
         'every 2 s, and mem_total_mb, what the VM had), its branch or PR URL once pushed, and `ci` once pushed: pending, success, ' +
         'failure, none (no checks), timeout, or unavailable, with each check and, after a failure, the follow-up job id. ' +
         'A pushed result has new_commits, pr_opened (true when this job opened the PR), and screenshots (image URLs, when ' +
@@ -126,7 +126,8 @@ export function buildMcpServer(
     },
     async ({ job_id }) => {
       const j = db.get(job_id);
-      return text(j ? view(j, db) : { error: 'not found', job_id });
+      // The report is read from disk here, not stored in the row, so list_jobs stays small.
+      return text(j ? { ...view(j, db), report: sched.report(job_id) } : { error: 'not found', job_id });
     },
   );
 
@@ -147,7 +148,8 @@ export function buildMcpServer(
       description:
         "The agent's own output, kept after the VM is gone: one JSON event per line for claude and codex, one JSON " +
         'document for antigravity, plain text for pi, nothing for shell. Use it to check what the agent actually ran. ' +
-        'grep keeps lines containing that substring; tail keeps the last lines after filtering. Lines over 4000 characters are cut.',
+        'grep keeps lines containing that substring; tail keeps the last lines after filtering. Lines over 4000 characters are cut; ' +
+        "for the agent's whole last message, read job_status report.",
       inputSchema: {
         job_id: z.string(),
         tail: z.number().int().min(1).max(500).default(50),

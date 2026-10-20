@@ -236,6 +236,12 @@ export class Scheduler {
     return lines.slice(Math.max(0, lines.length - tail - 1)).join('\n');
   }
 
+  /** The agent's whole last message, which job.sh writes to report.md; null before the agent has ended, and for shell. */
+  report(id: string): string | null {
+    const p = join(this.outDir(id), 'report.md');
+    return existsSync(p) ? readFileSync(p, 'utf8') : null;
+  }
+
   /** Last `tail` lines of the agent's own output (runner.jsonl, runner.json, or runner.txt), optionally filtered. */
   transcript(id: string, tail: number, grep: string | undefined): string | null {
     const dir = this.outDir(id);
