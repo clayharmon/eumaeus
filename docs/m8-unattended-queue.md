@@ -1,6 +1,6 @@
 # M8: a queue nobody watches
 
-Status: steps 1 to 7 built, with step 5's hermesmoney numbers pending a run on the mini; step 8 planned. Evidence is from the 33 hermesmoney jobs of 2026-10-20, ids `20261020-002321-1929`
+Status: steps 1 to 7 built; step 8 planned. Evidence is from the 33 hermesmoney jobs of 2026-10-20, ids `20261020-002321-1929`
 to `20261020-004138-2a54`, read with `job_status`, `job_logs`, and `job_transcript`.
 
 ## The wave loop queues 33 jobs at night and fixes their output by hand in the morning
@@ -434,7 +434,12 @@ What the build changed from the plan:
 |---|---|
 | A `shell` job running `node -e 'Buffer.alloc(1<<30, 1); setTimeout(() => {}, 8000)'` reports a peak above 1,000 MB | job `20261020-141158-f310`: `peak_mem_mb: 1208`, `mem_total_mb: 4047`, in a `4G` VM. The log ends `memory: peak 1208 MB of 4047 MB` |
 | An idle `shell` job, for the floor | job `20261020-141158-6075`, `true`: `peak_mem_mb: 147`. That is the VM, the clone, and `gh`, before any agent |
-| hermesmoney's `CARGO_BUILD_JOBS=2 mise run ci` as a `shell` job at 8G, 6G, and 4G, `cpus: 8` | pending: it runs on the mini, which holds the repo's warm disk, after this step is deployed there |
+| hermesmoney's `CARGO_BUILD_JOBS=2 mise run ci` as a `shell` job at 8G, 6G, and 4G, `cpus: 8` | on the mini, commit `8e3aa66`, each on the repo's golden disk, one after another. 8G: job `20261020-154231-cefb`, pass, peak 4,037 MB of 8,071, 3 min 53 s. 6G: job `20261020-154234-f51d`, pass, peak 4,026 MB of 6,059, 3 min 18 s. 4G: job `20261020-154236-0588`, pass, peak 3,894 MB of 4,047, 4 min 1 s. Setup took 11 s, 7 s, and 7 s |
+
+The client's memory question, answered: `mise run ci` alone needs about 4 GB. In the 8G and 6G VMs it settled at
+4,030 MB; in the 4G VM it ran at 96% of memory and still passed, 8 s slower than at 8G. A wave job also runs an
+agent, 240 to 260 MB for Haiku in step 7's runs, and Chromium when it looks at a page, 937 MB in M7. So 4G is
+for a `shell` job that only runs CI, 6G fits an agent job with 2 GB to spare, and 8G buys nothing over 6G.
 
 What the build changed from the plan:
 
