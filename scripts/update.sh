@@ -3,6 +3,8 @@
 # Usage: scripts/update.sh [--no-pull]
 # From the pause until the restart, new and queued jobs wait. Running jobs finish first; none is killed.
 set -euo pipefail
+# A non-interactive ssh session has neither Homebrew nor /usr/local/bin on PATH, and container and node live there.
+export PATH="/usr/local/bin:/opt/homebrew/bin:$HOME/.local/share/mise/shims:$PATH"
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"

@@ -1,6 +1,6 @@
 # M8: a queue nobody watches
 
-Status: steps 1 to 8 built; the "Done when" run is below. Evidence is from the 33 hermesmoney jobs of 2026-10-20, ids `20261020-002321-1929`
+Status: built; [Results](#results) records what changed from the plan, and the "Done when" run is last. Evidence is from the 33 hermesmoney jobs of 2026-10-20, ids `20261020-002321-1929`
 to `20261020-004138-2a54`, read with `job_status`, `job_logs`, and `job_transcript`.
 
 ## The wave loop queues 33 jobs at night and fixes their output by hand in the morning
@@ -501,3 +501,30 @@ What the build changed from the plan:
 - The server instructions name the budget when one is set, and tell the client to pass the memory a job needs.
 - On the mini another VM holds 8 GB, so two eumaeus jobs don't fit at any size that holds an agent: the setting
   there is 6G jobs, one at a time, and a 6G budget refuses an 8G submit instead of running it beside that VM.
+
+### Done when
+
+On the dev dispatcher with `EUMAEUS_MEMORY_BUDGET=12G`, `shell` jobs on the fixtures repo:
+
+| Item | Result |
+|---|---|
+| A chain shaped like one row of the wave: a build that pushes; a continuation with `skip_if: "true"` after it; a review that posts `Review: 0 blocking` after that; a fix whose `skip_if` reads the comment, after the review | branch `m8-wave`. Build `20261020-161125-fbe6` pushed `c7c5a57c`, opened PR #21, and posted `eumaeus/ci` success. Continuation `20261020-161125-e55f` started 2 ms after the build ended and finished `no_changes`, `skipped: ""`, in 15.5 s. Review `20261020-161126-a446` posted `Review: 0 blocking, 0 other`. Fix `20261020-161126-825e` ended `no_changes` with `skipped: "review found 0 blocking"`. Nothing was edited by hand. Every `job_status` had `peak_mem_mb`, 145 to 169 MB, and a `report` key, null for `shell` |
+| A restack-shaped job force-pushes the branch itself and replaces the body with `pr_body: "replace"` | job `20261020-161256-464c` amended, pushed with `--force-with-lease` itself, and ended `no_changes` with `pr_edited: true`. PR #21's title became `M8 wave: restacked` and its body named the job. Its `ci.json` posted `eumaeus/ci` success on the new head `b9273468` |
+| The PR shows a green `eumaeus/ci` from a job that wrote `ci.json` | PR #21: `eumaeus/ci` success on `c7c5a57c` after the build and on `b9273468` after the restack; GitHub's combined state `success` both times |
+| A failed chain head cancels the jobs behind it, and none of them booted a VM | step 3: A `20261020-134837-46ac` failed, and B and C ended `cancelled` in the same millisecond, one log line each |
+| The client's memory question has three numbers | step 5: 4,037 MB at 8G, 4,026 MB at 6G, 3,894 MB at 4G, all passing |
+| `pnpm smoke <owner/repo>` passes | job `20261020-160656-38cd` pushed and opened PR #20 in 22 s, with `peak_mem_mb: 145` in its result |
+
+What the run changed from the plan:
+
+- The first run of the chain lost `ci.json`'s braces and description: the check script ran under macOS's bash
+  3.2.57, which drops the quoting of `\"` inside single quotes inside a nested `$(...)`, so brace expansion ran on
+  the task before submit. `job.sh` answered as designed, `ci_reported: {error: "ci.json state must be success or
+  failure, got ''"}`, and the push stood. The second run built the tasks in variables. PR #19, from the first run,
+  is closed.
+- A `shell` job's `report` is null: no runner wrote a last message.
+- `scripts/update.sh` puts `/usr/local/bin`, Homebrew, and mise's shims on `PATH`: a non-interactive ssh session
+  had none of them, and the step 5 deploy stopped at `container: command not found`. The pull on the mini needs
+  `ssh -A`, since the mini has no GitHub key for `clayharmon`; the README's Updating section says so.
+- `CLAUDE.md` drops the M8 plan and keeps a generic dev loop.
+- PRs #18, #19, #20, and #21 are closed and their branches deleted.

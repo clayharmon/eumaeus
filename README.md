@@ -50,7 +50,7 @@ Without a GitHub App, jobs use your `gh` token instead. That token has your full
 
 ### Updating
 
-`scripts/update.sh` runs `git pull --ff-only` and `pnpm install`, pauses new jobs, waits for running jobs to finish, rebuilds the job image, and restarts the service. Queued jobs start once the new dispatcher is up. `/healthz` reports `commit` for the dispatcher and `image_commit` for the job image, and each job log names the image commit on its clone line.
+`scripts/update.sh` runs `git pull --ff-only` and `pnpm install`, pauses new jobs, waits for running jobs to finish, rebuilds the job image, and restarts the service. Queued jobs start once the new dispatcher is up. It works over a non-interactive ssh session, such as `ssh -A host 'cd ~/projects/eumaeus && scripts/update.sh'`; the `-A` forwards your agent for the pull when the host has no GitHub key of its own. `/healthz` reports `commit` for the dispatcher and `image_commit` for the job image, and each job log names the image commit on its clone line.
 
 ## Environments
 
