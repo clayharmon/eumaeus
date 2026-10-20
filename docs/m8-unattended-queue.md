@@ -1,6 +1,6 @@
 # M8: a queue nobody watches
 
-Status: steps 1 to 6 built, with step 5's hermesmoney numbers pending a run on the mini; steps 7 and 8 planned. Evidence is from the 33 hermesmoney jobs of 2026-10-20, ids `20261020-002321-1929`
+Status: steps 1 to 7 built, with step 5's hermesmoney numbers pending a run on the mini; step 8 planned. Evidence is from the 33 hermesmoney jobs of 2026-10-20, ids `20261020-002321-1929`
 to `20261020-004138-2a54`, read with `job_status`, `job_logs`, and `job_transcript`.
 
 ## The wave loop queues 33 jobs at night and fixes their output by hand in the morning
@@ -453,3 +453,23 @@ What the build changed from the plan:
 - `AGENT_SUMMARY` for `claude` and `antigravity` is now the first 4,000 characters of `report.md`, read once, rather
   than a second `jq` pass; the fallback PR body and the log line are unchanged.
 - `job_transcript`'s description points at `report` for the whole last message.
+
+### Step 7: `skip_if`
+
+| Check | Result |
+|---|---|
+| `skip_if: "true"` on a `claude` job ends `no_changes` with no `[agent]` line and no `usage`, and the log shows the time from VM start to end | job `20261020-154925-6651`, Haiku 5.5, also with `pr_body: "replace"`: `no_changes`, `skipped: ""`, `pr_edited: false`, `usage` null, 0 `[agent]` lines, `setup_ok` absent. VM start 15:49:25.296, exit 15:49:38.633: 13.3 s, the boot and the clone, `peak_mem_mb` 144 |
+| `skip_if: "false"` runs the agent | job `20261020-154942-6605`: the log says `skip_if exited 1: (no output); running the job`, then 3 `[agent]` lines, 1 turn, $0.001, `setup_ok: true` |
+| A `gh pr view` check against a fixtures PR skips when the body has the marker and runs when it doesn't | with `## Left for the next job` added to PR #18's body, job `20261020-155006-f363` on `m8-pr-body` ended `no_changes` in 15.9 s with `skipped: "PR body has a Left for the next job list"`. With the marker removed, job `20261020-155029-299d` with the same check ran the agent: 1 turn, $0.001. The check was `gh pr view "$EUMAEUS_BRANCH" --repo "$EUMAEUS_REPO" --json body -q .body \| grep -q "Left for the next job" && echo ...` |
+| A job `after` a skipped job runs | `shell` job `20261020-154925-2ee0` after `6651` started at 15:49:39.091, 0.46 s after the skipped job's exit, and logged `ran after the skipped job` |
+
+What a skipped job costs: 13.3 s and 15.9 s of VM in these two runs, against the 7 s to 223 s of setup plus an
+agent start that the 2026-10-20 continuations paid.
+
+What the build changed from the plan:
+
+- A check that prints nothing skips with `skipped: ""`, and the log says `(no output)`. A check that wants a reason
+  in `job_status` echoes one, as the fixtures check does.
+- The check's stderr goes to the job log; only its stdout's first line is kept.
+- A skipped job's result has no `env` and no `setup_ok`: setup never ran, so the disk is not promoted.
+- The README's Chains section gains the `skip_if` paragraph with the `Review: 0 blocking` example.

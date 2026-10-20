@@ -41,6 +41,8 @@ function instructions(inbox: string | null): string {
     '- submit_job after=<job id or ids> holds a job, on any branch, until those jobs end. It starts once each ended ' +
       'with a status in after_status (default pushed or no_changes); otherwise it ends cancelled with ' +
       '"after <id> ended <status>", and so do the jobs behind it, without booting a VM.',
+    '- submit_job skip_if=<bash> runs that command in the VM before the agent; exit 0 ends the job no_changes with ' +
+      'result.skipped and no agent turns, so a chain can hold a job that may have nothing to do.',
     '- After a push, eumaeus watches CI and may submit a follow-up job to fix a failure (job_status ci.followup). ' +
       'An agent that runs CI itself can write /work/ci.json; it becomes the commit status eumaeus/ci, the agent\'s own claim.',
     inbox
@@ -95,6 +97,11 @@ export function buildMcpServer(
           'status, this job ends cancelled with error "after <id> ended <status>", and so do jobs waiting on it; no VM boots.'),
         after_status: z.array(z.enum([...TERMINAL] as [JobStatus, ...JobStatus[]])).min(1).optional().describe(
           'Statuses of the named jobs that let this one start. Default ["pushed", "no_changes"]. Add "failed" to run after a failure.'),
+        skip_if: z.string().min(1).max(4_000).optional().describe(
+          'A bash command the VM runs in the checked-out repo after the clone and before setup, with gh, git, jq, node, ' +
+          'GH_TOKEN, and EUMAEUS_JOB_ID/REPO/BRANCH, under a 120 s timeout. Exit 0 ends the job no_changes with result.skipped ' +
+          '(its first output line) before the agent starts, so it costs no agent turns; any other exit runs the job. ' +
+          'E.g. gh pr view "$EUMAEUS_BRANCH" --repo "$EUMAEUS_REPO" --json body -q .body | grep -q "nothing left"'),
       },
     },
     async (args) => {
@@ -121,7 +128,8 @@ export function buildMcpServer(
         'pr_body has pr_edited: whether it replaced the PR body. A job that wrote /work/ci.json has ci_reported: {state, sha, ' +
         'description} for the eumaeus/ci commit status it posted, or {error}. `trigger` is {kind, url, login} for a job started from GitHub by a label or mention ' +
         '(kind: label, issue, comment, review-comment, or review), and null otherwise. `after` and `after_status` are the ' +
-        'jobs this one waits for and the statuses that let it start; a job cancelled by a chain has error "after <id> ended <status>".',
+        'jobs this one waits for and the statuses that let it start; a job cancelled by a chain has error "after <id> ended <status>". ' +
+        'A job whose skip_if exited 0 is no_changes with result.skipped, the first line the check printed, and no usage.',
       inputSchema: { job_id: z.string() },
     },
     async ({ job_id }) => {

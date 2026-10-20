@@ -4,7 +4,8 @@
 # Optional env: BASE_BRANCH (main), BRANCH (job/$JOB_ID), RUNNER (claude|codex|antigravity|pi|shell), MODEL,
 #   GIT_AUTHOR_NAME/GIT_AUTHOR_EMAIL (commit identity), OPEN_PR (1 = open a pull request after push),
 #   PR_ASSIGNEE (GitHub login to assign the PR to), PR_FOOTER (appended to the body of a PR this job opens, e.g.
-#   "Closes #12"), PR_BODY (replace = rewrite the open PR's title and body from /work/pr.md, even with no commit).
+#   "Closes #12"), PR_BODY (replace = rewrite the open PR's title and body from /work/pr.md, even with no commit),
+#   SKIP_IF (a bash command run after the checkout; exit 0 ends the job no_changes before setup and the agent).
 # Agent runners are asked to write the PR title and body to /work/pr.md (filling the repo's PR template if
 # there is one). The PR is opened from that file; without it the body is the task plus the agent's summary.
 # PNGs an agent saves in /work/screenshots/ go to the branch eumaeus-screenshots and show in the PR.
@@ -102,6 +103,24 @@ if git rev-parse -q --verify "origin/$BRANCH" >/dev/null; then
 else
   git checkout -q -b "$BRANCH"
   UPSTREAM="origin/$BASE_BRANCH"
+fi
+
+# A check that decides whether the agent runs, before setup: gh, git, jq, and node are in the image, and a check
+# that needs the repo's tools doesn't fit. Exit 0 ends the job no_changes with the first line of its output; any
+# other exit, the timeout's 124 included, runs the job. Its stderr goes to the log. Setup hasn't run, so a skipped
+# job's disk is not promoted.
+if [ -n "${SKIP_IF:-}" ]; then
+  rc=0
+  timeout 120 /bin/bash -c "$SKIP_IF" >/tmp/skip.out || rc=$?
+  first="$(head -n 1 /tmp/skip.out | cut -c1-200)"
+  if [ "$rc" -eq 0 ]; then
+    log "skip_if exited 0: ${first:-(no output)}; the agent does not run"
+    extra=",\"skipped\":$(jq -n --arg s "$first" '$s')"
+    [ "${PR_BODY:-}" = replace ] && extra="$extra,\"pr_edited\":false"
+    emit no_changes "$extra"; exit 0
+  fi
+  why="exited $rc"; [ "$rc" = 124 ] && why="timed out after 120 s (exit 124)"
+  log "skip_if $why: ${first:-(no output)}; running the job"
 fi
 
 # Repo environment. A detected tool runs from the disk at /nix, which carries Nix, devenv, devbox, mise, and Flox.

@@ -28,6 +28,8 @@ export interface SubmitInput {
   after?: string | string[] | undefined;
   /** Statuses of the named jobs that let this one start. Default: pushed or no_changes. */
   after_status?: JobStatus[] | undefined;
+  /** A bash command the VM runs after the checkout, before setup; exit 0 ends the job no_changes with `skipped`. */
+  skip_if?: string | undefined;
 }
 
 export const AFTER_MAX = 20;
@@ -81,6 +83,7 @@ export class Scheduler {
       pr_body: input.pr_body ?? null,
       after: after.length ? JSON.stringify(after) : null,
       after_status: after.length ? JSON.stringify(input.after_status ?? DEFAULT_AFTER_STATUS) : null,
+      skip_if: input.skip_if ?? null,
     });
     // A job chained behind one that already ended badly ends now, not when a slot frees.
     this.checkWaiter(row);

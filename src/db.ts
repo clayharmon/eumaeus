@@ -41,6 +41,8 @@ export interface JobRow {
   after: string | null;
   /** JSON array of statuses; null when `after` is null. */
   after_status: string | null;
+  /** A bash command the VM runs after the checkout; exit 0 ends the job no_changes before the agent starts. */
+  skip_if: string | null;
 }
 
 export const DEFAULT_AFTER_STATUS: readonly JobStatus[] = ['pushed', 'no_changes'];
@@ -66,11 +68,11 @@ export interface TriggerRow {
   replied_at: string | null;
 }
 
-export type NewJob = Pick<JobRow, 'id' | 'repo' | 'task' | 'runner' | 'model' | 'base_branch' | 'branch' | 'cpus' | 'memory' | 'parent_id' | 'ci_fix' | 'pr_footer' | 'pr_body' | 'after' | 'after_status'>;
+export type NewJob = Pick<JobRow, 'id' | 'repo' | 'task' | 'runner' | 'model' | 'base_branch' | 'branch' | 'cpus' | 'memory' | 'parent_id' | 'ci_fix' | 'pr_footer' | 'pr_body' | 'after' | 'after_status' | 'skip_if'>;
 export type NewTrigger = Omit<TriggerRow, 'eyes_id' | 'created_at' | 'replied_at'>;
 
 /** Columns added after M4; an older database gets them on open. */
-const ADDED_COLUMNS: Record<string, string> = { parent_id: 'TEXT', ci_fix: 'INTEGER', ci_status: 'TEXT', ci: 'TEXT', pr_footer: 'TEXT', pr_body: 'TEXT', after: 'TEXT', after_status: 'TEXT' };
+const ADDED_COLUMNS: Record<string, string> = { parent_id: 'TEXT', ci_fix: 'INTEGER', ci_status: 'TEXT', ci: 'TEXT', pr_footer: 'TEXT', pr_body: 'TEXT', after: 'TEXT', after_status: 'TEXT', skip_if: 'TEXT' };
 
 const now = (): string => new Date().toISOString();
 
@@ -128,10 +130,10 @@ export class Db {
   insert(j: NewJob): JobRow {
     this.db
       .prepare(
-        `INSERT INTO jobs (id, repo, task, runner, model, base_branch, branch, cpus, memory, parent_id, ci_fix, pr_footer, pr_body, after, after_status, status, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?)`,
+        `INSERT INTO jobs (id, repo, task, runner, model, base_branch, branch, cpus, memory, parent_id, ci_fix, pr_footer, pr_body, after, after_status, skip_if, status, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?)`,
       )
-      .run(j.id, j.repo, j.task, j.runner, j.model, j.base_branch, j.branch, j.cpus, j.memory, j.parent_id, j.ci_fix, j.pr_footer, j.pr_body, j.after, j.after_status, now());
+      .run(j.id, j.repo, j.task, j.runner, j.model, j.base_branch, j.branch, j.cpus, j.memory, j.parent_id, j.ci_fix, j.pr_footer, j.pr_body, j.after, j.after_status, j.skip_if, now());
     return this.get(j.id) as JobRow;
   }
 
