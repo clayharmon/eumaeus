@@ -1,7 +1,7 @@
 # M7: work from the pull request
 
-Status: plan approved 2026-10-19; next is step 7. Browser measurements are from a spike on an Apple silicon Mac on
-`container` 1.5.0 with `@playwright/cli` 0.1.22.
+Status: built; [Results](#results) records what changed from the plan. Browser measurements are from a spike on an
+Apple silicon Mac on `container` 1.5.0 with `@playwright/cli` 0.1.22.
 
 ## You review on GitHub, and eumaeus can't hear you there
 
@@ -490,3 +490,16 @@ What the build changed from the plan:
   The viewer's own session loads it, which is why the image works on a private repo.
 - The hand-off asks for PNGs of 2 MB at most.
 - `clayharmon/eumaeus-fixtures-private` stays for later runs.
+
+### Step 7: README
+
+| Check | Result |
+|---|---|
+| `pnpm smoke <owner/repo>` passes with the inbox on, from "Done when" | job `20261020-005609-988a` pushed and opened PR #17 in 13.7 s, closed. The inbox watched 52 repos, and its last poll was 60 responses, all `304` |
+
+What the build changed from the plan:
+
+- The README gains "Starting jobs from GitHub" and "Browser", rows for `EUMAEUS_INBOX_USERS` and
+  `EUMAEUS_INBOX_POLL_S`, and `trigger` in `job_status`. Its limits gain the trust rule, the Issues permission,
+  and the 937 MB one Chromium page takes.
+- The README tells you to set `EUMAEUS_INBOX_USERS` on one dispatcher per GitHub App, from the plan's edge cases.

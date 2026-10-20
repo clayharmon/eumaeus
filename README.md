@@ -15,13 +15,16 @@ Limits:
 - Runs on Apple Silicon Macs only. Jobs use Apple's [`container`](https://github.com/apple/container) for VMs.
 - Works with GitHub repos only.
 - Jobs time out after 60 minutes. Restarting the dispatcher marks in-flight jobs `failed`; `scripts/update.sh` waits for them first.
+- [Starting jobs from GitHub](#starting-jobs-from-github) turns issue and PR text into agent instructions. `EUMAEUS_INBOX_USERS` is the only gate: an issue a stranger wrote becomes a task once a listed user labels it. The VM's token can push to any branch of its repo for an hour, the default branch included unless branch protection stops it. Protect the default branch on repos the inbox watches.
+- The inbox needs the GitHub App with Issues read and write, and it mints tokens for every repo of an installation. They stay on the host.
+- Every VM carries a headless Chromium. One open page took 937 MB of the VM's 4 GB, before the app's dev server and the agent; a repo with a heavy dev server may need `EUMAEUS_MEMORY=6G`.
 
 ## What a job does
 
 1. `submit_job(repo, task)` queues the job in SQLite and returns its id at once.
 2. The dispatcher boots a VM from the job image. At most `EUMAEUS_MAX_CONCURRENT` (default 2) run at a time.
 3. The VM clones the repo, sets up the repo's [environment](#environments), runs the agent on the task, commits, and pushes `job/<id>`.
-4. It opens a PR with the title and body the agent wrote to `/work/pr.md`, using the repo's PR template if it has one.
+4. It opens a PR with the title and body the agent wrote to `/work/pr.md`, using the repo's PR template if it has one. Screenshots the agent saved show in the body; see [Browser](#browser).
 5. The VM is deleted. The pushed branch, the PR, the job log, the agent's transcript, and the repo's disk are all that remain. Logs and transcripts stay in `~/.local/share/eumaeus` until you delete them.
 6. The dispatcher watches [CI](#ci) on the pushed commit and can send a failure to a follow-up job.
 
@@ -130,12 +133,53 @@ When a check fails and the job has fix attempts left, eumaeus submits a follow-u
 
 The GitHub App needs read access to Checks, Commit statuses, and Actions. `node scripts/github-app-setup.ts` asks for it on a new app. An app created before this change lacks it: on the app's settings page, under Permissions & events, set those three to Read-only and save, then accept the new permissions on the installation, which GitHub links to by email.
 
+## Starting jobs from GitHub
+
+Set `EUMAEUS_INBOX_USERS` to a comma-separated list of GitHub logins, and the dispatcher turns what those people do on GitHub into jobs, in every repo the GitHub App is installed on. Empty, the default, turns this off. The mention is `@` plus the app's slug, from `github-app.json`; the dispatcher's log names it at start.
+
+| You do | Where | The job |
+|---|---|---|
+| Add the label `eumaeus` | an open issue | branches from the default branch, works on the issue, and opens a PR whose body ends `Closes #<n>` |
+| Mention the app | a new issue, or a comment on an open issue | the same as the label |
+| Mention the app | a PR comment or an inline review comment | commits to the PR's branch what the comment asks; an inline comment's task names its file and line and quotes the last 5 lines of its diff |
+| Mention the app | a review's body | one job for the body and every inline comment of that review |
+
+An issue's task is its title, its body, and the comments by listed users. Comments by anyone else stay out. A PR job that follows an eumaeus job on the same branch takes that job's runner and model and appends its task. On a PR a person opened, it runs `claude` with the default model.
+
+The answer goes back where you asked, from the app's bot:
+
+1. 👀 while the job runs. A review has no reactions, so its 👀 goes on the PR.
+2. When the job ends, 🚀 for `pushed` or `no_changes`, or 😕 for `failed` or `cancelled`, in the 👀's place.
+3. One line: `Opened #14.`, `Pushed 2 commits, up to 1a2b3c4.`, `No changes. Job <id>.`, or `Failed: <error>. Job <id>.` An inline comment gets it as a reply in its thread.
+
+- The label comes off when the job starts. Add it again to retry.
+- The label on a PR, a mention on a PR from a fork, and a mention with nothing else on a PR get a reply and start nothing. On an issue, a bare mention means "do this issue".
+- A mention in a quoted line (`>`) or in code doesn't count, and neither does one added by editing a comment.
+- A trigger from a login not in the list starts nothing. The dispatcher log says so once.
+- Each trigger starts one job, across restarts too. A restart neither loses an answer nor posts it twice.
+- The first poll of a repo starts from that moment, so turning this on ignores what came before.
+- `job_status` shows `trigger`: what kind, its URL, and who caused it.
+
+GitHub can't reach the dispatcher, so it polls. Every `EUMAEUS_INBOX_POLL_S` (60) seconds it reads each repo's open-issue list with the ETag from the last poll. A `304` costs no rate limit; a quiet poll of 50 repos took 1.8 s. When the list changes, it reads label events, comments, inline comments, and the reviews of each PR that changed. A rate-limit response pauses polling until GitHub's reset. `/healthz` `inbox` shows the repos watched, the last poll, triggers waiting for an answer, and the rate limit left per installation.
+
+Setup:
+
+- The app needs Issues read and write, to take labels off and post reactions and comments. `node scripts/github-app-setup.ts` asks for it on a new app. On an existing app, set Issues to Read and write on its settings page, then accept the new permission on the installation.
+- Create the label `eumaeus` once in each repo you want to label issues in. eumaeus never creates labels.
+- Set `EUMAEUS_INBOX_USERS` on one dispatcher per GitHub App. Two dispatchers with the same app and the list set both submit a job for every trigger.
+
+## Browser
+
+Every VM has Playwright's Chromium and [`playwright-cli`](https://www.npmjs.com/package/@playwright/cli) 0.1.22, so an agent can start the app, open a page at 375 px, and look. Agent runners are told so, and asked to save up to 6 PNG screenshots, 2 MB at most each, to `/work/screenshots/`.
+
+After the push, the job commits them under `<job id>/` on the branch `eumaeus-screenshots`, one job per commit, and the PR body shows them. On a PR that was already open, they go in a comment. The PR's own branch never holds one, so a squash merge carries none. The images render on github.com and in GitHub Mobile, on private repos too, for anyone who can see the repo. Clones leave `eumaeus-screenshots` out, so it doesn't slow them as it grows.
+
 ## MCP tools
 
 | Tool | What it does |
 |---|---|
 | `submit_job(repo, task, runner?, model?, base_branch?, branch?, cpus?, memory?, ci_fix?)` | Queues a job. Pass `branch` to name the branch: an existing one, such as a PR head, is continued, and a new name is created from `base_branch`. Pass `ci_fix` to change how many follow-ups a CI failure may start. |
-| `job_status(job_id)` | Returns `queued`, `running`, `pushed`, `no_changes`, `failed`, or `cancelled`, plus the PR URL, `result.usage` (cost and turns for `claude`, token counts for `codex` and `antigravity`), and `ci` once pushed. |
+| `job_status(job_id)` | Returns `queued`, `running`, `pushed`, `no_changes`, `failed`, or `cancelled`, plus the PR URL, `result.usage` (cost and turns for `claude`, token counts for `codex` and `antigravity`), `ci` once pushed, and `trigger` for a job started from GitHub. |
 | `job_logs(job_id, tail?)` | Tails the log. `claude` and `codex` add one `[agent]` line per tool call as they run. |
 | `job_transcript(job_id, tail?, grep?)` | Returns the agent's own output stream, kept after the VM is gone. Use it to check what the agent actually ran. |
 | `cancel_job(job_id)` | Cancels a queued job, or stops a running one and removes its VM. |
@@ -175,6 +219,8 @@ The launchd agent reads env vars from `~/.config/eumaeus/dispatcher.env`. Defaul
 | `EUMAEUS_IMAGE` | `eumaeus-job:dev` |
 | `EUMAEUS_CI_FIX` | `1` follow-up job per pushed job when its CI fails; `0` watches only |
 | `EUMAEUS_CI_TIMEOUT_MIN` | `60` |
+| `EUMAEUS_INBOX_USERS` | empty, which turns [starting jobs from GitHub](#starting-jobs-from-github) off |
+| `EUMAEUS_INBOX_POLL_S` | `60` |
 | `EUMAEUS_DISK_MAX_GB`, `EUMAEUS_DISK_FREE_GB`, `EUMAEUS_DISK_IDLE_DAYS` | `40`, `15`, `30`; see [Environments](#environments) |
 | `EUMAEUS_DISK_SIZE` | `64G` per repo disk; the image file is sparse, so it takes only what jobs write |
 
@@ -185,7 +231,7 @@ The launchd agent reads env vars from `~/.config/eumaeus/dispatcher.env`. Defaul
 - `scripts/run-job.sh <owner/repo> "<task>" [runner] [model]` runs one job by hand, without the dispatcher.
 - `scripts/build-image.sh [image]` builds the job image with the checkout's commit stamped into it.
 - `node scripts/disk.ts template [--if-stale]|ls|reset <owner/name>` builds the template disk, lists disks with free space and the limits, or deletes one.
-- [`clayharmon/eumaeus-fixtures`](https://github.com/clayharmon/eumaeus-fixtures) has one branch per environment file, used to test them.
+- [`clayharmon/eumaeus-fixtures`](https://github.com/clayharmon/eumaeus-fixtures) has one branch per environment file, used to test them, and `web`, a page whose button overflows at 375 px.
 - `images/job/job.sh` is everything that runs inside the VM.
 
 ## License
