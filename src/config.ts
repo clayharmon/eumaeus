@@ -24,6 +24,11 @@ export const config = {
   prAssignee: env('EUMAEUS_PR_ASSIGNEE', env('EUMAEUS_GH_USER', '')),
   cpus: Number(env('EUMAEUS_CPUS', '4')),
   memory: env('EUMAEUS_MEMORY', '4G'),
+  /**
+   * Jobs start only while the running jobs' memory limits plus the next one's fit under this, e.g. 12G on a 16 GB
+   * Mac. EUMAEUS_MAX_CONCURRENT stays as a ceiling. Empty turns it off. Limits count, not peaks.
+   */
+  memoryBudget: env('EUMAEUS_MEMORY_BUDGET', ''),
   jobTimeoutMs: Number(env('EUMAEUS_JOB_TIMEOUT_MIN', '60')) * 60_000,
   /** Size of each per-repo disk. The image file is sparse: it takes host space only for what jobs write. */
   diskSize: env('EUMAEUS_DISK_SIZE', '64G'),
@@ -43,3 +48,10 @@ export const config = {
 } as const;
 
 export type Config = typeof config;
+
+/** `4G` or `512M` as megabytes: the syntax `memory`, EUMAEUS_MEMORY, and EUMAEUS_MEMORY_BUDGET share. */
+export function memoryMb(s: string): number {
+  const m = /^(\d+)([MG])$/.exec(s);
+  if (!m) throw new Error(`bad memory size ${JSON.stringify(s)}; use e.g. 4G or 512M`);
+  return Number(m[1]) * (m[2] === 'G' ? 1024 : 1);
+}

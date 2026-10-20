@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { appendFileSync, existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { Config } from './config.ts';
+import { memoryMb, type Config } from './config.ts';
 import type { CredentialSource } from './credentials.ts';
 import { DEFAULT_AFTER_STATUS, TERMINAL, type Db, type JobRow, type JobStatus } from './db.ts';
 import { jobVolumes, removeVolume, type Disks } from './disks.ts';
@@ -44,12 +44,15 @@ export class Scheduler {
   private readonly cfg: Config;
   private readonly creds: CredentialSource;
   readonly disks: Disks;
+  /** EUMAEUS_MEMORY_BUDGET in MB, or null when it is off. */
+  readonly budgetMb: number | null;
 
   constructor(db: Db, cfg: Config, creds: CredentialSource, disks: Disks) {
     this.db = db;
     this.cfg = cfg;
     this.creds = creds;
     this.disks = disks;
+    this.budgetMb = cfg.memoryBudget ? memoryMb(cfg.memoryBudget) : null;
   }
 
   logPath(id: string): string { return join(this.cfg.dataDir, 'logs', `${id}.log`); }
@@ -61,11 +64,18 @@ export class Scheduler {
   activeCount(): number { return this.active.size; }
   paused(): boolean { return existsSync(this.pauseFile); }
 
-  /** Queues the job. Throws when `after` names more than AFTER_MAX jobs or one that doesn't exist; nothing is queued then. */
+  /**
+   * Queues the job. Throws, queuing nothing, when `after` names more than AFTER_MAX jobs or one that doesn't exist,
+   * or when `memory` is over the budget and so could never start.
+   */
   submit(input: SubmitInput): JobRow {
     const after = input.after === undefined ? [] : typeof input.after === 'string' ? [input.after] : input.after;
     if (after.length > AFTER_MAX) throw new Error(`after: at most ${AFTER_MAX} jobs`);
     for (const dep of after) if (!this.db.get(dep)) throw new Error(`after: no job ${dep}`);
+    const memory = input.memory ?? this.cfg.memory;
+    if (this.budgetMb !== null && memoryMb(memory) > this.budgetMb) {
+      throw new Error(`memory ${memory} is over EUMAEUS_MEMORY_BUDGET ${this.cfg.memoryBudget}`);
+    }
     const id = newJobId();
     const row = this.db.insert({
       id,
@@ -117,14 +127,31 @@ export class Scheduler {
     return false;
   }
 
-  /** Start queued jobs until the concurrency limit is reached. */
+  /**
+   * Start queued jobs while a slot is free and, with a budget, while the next job's memory limit fits beside the
+   * running ones. A job that doesn't fit doesn't hold the ones behind it: a 4G job starts beside an 8G one while a
+   * second 8G job waits. The budget counts limits, not peaks, since a VM may use all of its limit.
+   */
   pump(): void {
     if (this.paused()) return;
     while (this.active.size < this.cfg.maxConcurrent) {
-      const job = this.db.claimNext();
+      const next = this.db.ready().find((j) => this.fits(j));
+      if (!next) return;
+      const job = this.db.claim(next.id);
       if (!job) return;
       void this.launch(job);
     }
+  }
+
+  /** Memory limits of the running jobs, in MB. */
+  inUseMb(): number {
+    let sum = 0;
+    for (const p of this.active.values()) sum += memoryMb(p.job.memory);
+    return sum;
+  }
+
+  private fits(j: JobRow): boolean {
+    return this.budgetMb === null || this.inUseMb() + memoryMb(j.memory) <= this.budgetMb;
   }
 
   private async launch(job: JobRow): Promise<void> {

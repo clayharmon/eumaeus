@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { config } from './config.ts';
+import { config, memoryMb } from './config.ts';
 import { pickCredentials } from './credentials.ts';
 import { CiWatcher } from './ci.ts';
 import { Db } from './db.ts';
@@ -12,6 +12,12 @@ import { Scheduler } from './jobs.ts';
 import { dispatcherCommit, imageCommit } from './version.ts';
 
 const log = (s: string): void => console.error(`[eumaeus] ${new Date().toISOString()} ${s}`);
+
+// A default job size over the budget could never start, so stop here with both numbers rather than queue forever.
+if (config.memoryBudget && memoryMb(config.memory) > memoryMb(config.memoryBudget)) {
+  log(`EUMAEUS_MEMORY ${config.memory} is over EUMAEUS_MEMORY_BUDGET ${config.memoryBudget}; set one under the other`);
+  process.exit(1);
+}
 
 mkdirSync(join(config.dataDir, 'logs'), { recursive: true });
 const db = new Db(config.dataDir);
@@ -25,7 +31,7 @@ if (creds.describe.startsWith('gh-cli')) log(`no GitHub App at ${config.githubAp
 
 const recovered = await sched.recover();
 if (recovered) log(`marked ${recovered} orphaned running job(s) failed`);
-log(`data=${config.dataDir} image=${config.image} max_concurrent=${config.maxConcurrent} per_job=${config.cpus}cpu/${config.memory}`);
+log(`data=${config.dataDir} image=${config.image} max_concurrent=${config.maxConcurrent} per_job=${config.cpus}cpu/${config.memory} memory_budget=${config.memoryBudget || 'off'}`);
 log(`commit=${dispatcherCommit() ?? 'unknown'} image_commit=${(await imageCommit(config.image)) ?? 'unknown'}`);
 if (sched.paused()) log(`paused: queued jobs wait until ${sched.pauseFile} is removed`);
 log(existsSync(disks.template) ? `disk template: ${disks.template}` : `disk template missing; jobs run with no disk until: node scripts/disk.ts template`);

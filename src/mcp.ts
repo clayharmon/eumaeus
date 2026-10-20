@@ -32,7 +32,7 @@ function view(j: JobRow, db: Db): Record<string, unknown> {
  * What every client's agent reads at the start of a session. Agents remember nothing between sessions, so this and
  * the tool descriptions say what the dispatcher does now; they are not a changelog.
  */
-function instructions(inbox: string | null): string {
+function instructions(inbox: string | null, budget: string | null): string {
   return [
     'eumaeus runs coding agents in throwaway VMs and pushes their work to GitHub. submit_job returns at once; poll ' +
       'job_status until the status is pushed, no_changes, failed, or cancelled.',
@@ -50,14 +50,18 @@ function instructions(inbox: string | null): string {
       : '- Starting jobs from GitHub labels and mentions is off on this dispatcher.',
     '- Every VM has a headless Chromium driven by playwright-cli. Screenshots an agent saves show in the PR; ' +
       'job_status result.screenshots lists their URLs.',
+    ...(budget
+      ? [`- Jobs start while their memory limits fit under a ${budget} budget; a job whose memory is over it is refused. ` +
+         'A bigger job waits while smaller ones behind it start, so pass the memory a job needs, not more.']
+      : []),
   ].join('\n');
 }
 
 export function buildMcpServer(
-  sched: Scheduler, db: Db, creds: CredentialSource, secretsFile: string, commit: string | null, inbox: string | null,
+  sched: Scheduler, db: Db, creds: CredentialSource, secretsFile: string, commit: string | null, inbox: string | null, budget: string | null,
 ): McpServer {
   // The commit as semver build metadata, so a client's server list shows which build it reached.
-  const server = new McpServer({ name: 'eumaeus', version: commit ? `0.1.0+${commit}` : '0.1.0' }, { instructions: instructions(inbox) });
+  const server = new McpServer({ name: 'eumaeus', version: commit ? `0.1.0+${commit}` : '0.1.0' }, { instructions: instructions(inbox, budget) });
 
   server.registerTool(
     'submit_job',
@@ -83,7 +87,8 @@ export function buildMcpServer(
         base_branch: z.string().default('main'),
         branch: z.string().optional().describe('Branch to push. An existing branch (e.g. a PR head) is checked out and continued; a new name is created from base_branch. Default: job/<id>'),
         cpus: z.number().int().min(1).max(8).optional(),
-        memory: z.string().regex(/^\d+[MG]$/).optional().describe('e.g. 4G'),
+        memory: z.string().regex(/^\d+[MG]$/).optional().describe(
+          'e.g. 4G. Refused when over EUMAEUS_MEMORY_BUDGET; with a budget set, a job starts only when its limit fits beside the running jobs\' limits.'),
         ci_fix: z.number().int().min(0).max(3).optional().describe(
           'Follow-up jobs eumaeus may submit, one at a time, when CI fails on what this job pushed. Default EUMAEUS_CI_FIX (1). ' +
           '0 watches CI and records the result without fixing; use it when you handle CI yourself.'),

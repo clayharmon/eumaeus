@@ -1,6 +1,6 @@
 # M8: a queue nobody watches
 
-Status: steps 1 to 7 built; step 8 planned. Evidence is from the 33 hermesmoney jobs of 2026-10-20, ids `20261020-002321-1929`
+Status: steps 1 to 8 built; the "Done when" run is below. Evidence is from the 33 hermesmoney jobs of 2026-10-20, ids `20261020-002321-1929`
 to `20261020-004138-2a54`, read with `job_status`, `job_logs`, and `job_transcript`.
 
 ## The wave loop queues 33 jobs at night and fixes their output by hand in the morning
@@ -478,3 +478,26 @@ What the build changed from the plan:
 - The check's stderr goes to the job log; only its stdout's first line is kept.
 - A skipped job's result has no `env` and no `setup_ok`: setup never ran, so the disk is not promoted.
 - The README's Chains section gains the `skip_if` paragraph with the `Review: 0 blocking` example.
+
+### Step 8: memory budget
+
+Built, since step 5 showed 6G and 4G passing. On the dev dispatcher with `EUMAEUS_MEMORY_BUDGET=12G` and
+`EUMAEUS_MAX_CONCURRENT=2`, `shell` jobs that `sleep`:
+
+| Check | Result |
+|---|---|
+| Two 8G jobs run one after the other | `20261020-160222-ff7e` ran 16:02:22.843 to 16:02:44.527; `20261020-160223-5b00` started at 16:02:44.536, 9 ms after it ended. While the first ran, `/healthz` showed `running: 1, queued: 1, memory: {budget_mb: 12288, in_use_mb: 8192}` |
+| Two 4G jobs run together | `20261020-160314-8b44` and `20261020-160314-ff3f` started 0.5 s apart and overlapped for 23 s; `/healthz` showed `running: 2, in_use_mb: 8192` |
+| A 16G submit is refused with both numbers | `submit_job` returned `memory 16G is over EUMAEUS_MEMORY_BUDGET 12G`, and `list_jobs` has no row for it |
+| `/healthz` shows `in_use_mb` while they run | 8192 with one 8G job, 8192 with two 4G jobs, 12288 with an 8G and a 4G job, 0 after |
+| A job that doesn't fit doesn't hold the ones behind it, from the design | 8G `20261020-160343-0efa` started at 16:03:43.195; 8G `20261020-160343-9dbc`, submitted next, waited; 4G `20261020-160343-c4e0`, submitted last, started at 16:03:43.608 beside the first. The second 8G job started at 16:04:05.423, the millisecond the first ended |
+| `EUMAEUS_MEMORY` over the budget stops the dispatcher at start | with `EUMAEUS_MEMORY=16G EUMAEUS_MEMORY_BUDGET=12G`, the only line was `EUMAEUS_MEMORY 16G is over EUMAEUS_MEMORY_BUDGET 12G; set one under the other`, before the database was opened |
+
+What the build changed from the plan:
+
+- `claimNext` is gone; `ready()` returns every queued job that passes the branch and `after` rules, and `claim(id)`
+  moves one to running. Without a budget `pump()` takes the first, as before.
+- `memoryMb` in `src/config.ts` parses `4G` and `512M` for the budget, the submit check, and the start check.
+- The server instructions name the budget when one is set, and tell the client to pass the memory a job needs.
+- On the mini another VM holds 8 GB, so two eumaeus jobs don't fit at any size that holds an agent: the setting
+  there is 6G jobs, one at a time, and a 6G budget refuses an 8G submit instead of running it beside that VM.

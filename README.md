@@ -23,7 +23,7 @@ Limits:
 ## What a job does
 
 1. `submit_job(repo, task)` queues the job in SQLite and returns its id at once.
-2. The dispatcher boots a VM from the job image. At most `EUMAEUS_MAX_CONCURRENT` (default 2) run at a time.
+2. The dispatcher boots a VM from the job image. At most `EUMAEUS_MAX_CONCURRENT` (default 2) run at a time. With `EUMAEUS_MEMORY_BUDGET` set, say `12G` on a 16 GB Mac, a job also waits until its memory limit fits beside the running jobs' limits; a 4G job starts beside an 8G one while a second 8G job waits. `/healthz` shows `memory.in_use_mb`, and `submit_job` refuses a `memory` over the budget.
 3. The VM clones the repo, sets up the repo's [environment](#environments), runs the agent on the task, commits, and pushes `job/<id>`.
 4. It opens a PR with the title and body the agent wrote to `/work/pr.md`, using the repo's PR template if it has one. Screenshots the agent saved show in the body; see [Browser](#browser). A job on a branch whose PR is already open leaves the body alone, unless it was submitted with `pr_body: "replace"`: then its `pr.md` becomes the PR's title and body, with the job's own screenshots and run block, and it does so even when it pushed nothing.
 5. The VM is deleted. The pushed branch, the PR, the job log, the agent's transcript, and the repo's disk are all that remain. Logs and transcripts stay in `~/.local/share/eumaeus` until you delete them.
@@ -227,6 +227,7 @@ The launchd agent reads env vars from `~/.config/eumaeus/dispatcher.env`. Defaul
 | `EUMAEUS_AUTH_TOKEN` | unset, which turns auth off |
 | `EUMAEUS_MAX_CONCURRENT` | `2` |
 | `EUMAEUS_CPUS`, `EUMAEUS_MEMORY` | `4`, `4G` per VM |
+| `EUMAEUS_MEMORY_BUDGET` | empty, which turns it off; e.g. `12G`: jobs start only while their memory limits fit under it. `EUMAEUS_MEMORY` over it stops the dispatcher at start |
 | `EUMAEUS_JOB_TIMEOUT_MIN` | `60` |
 | `EUMAEUS_OPEN_PR` | `1`; `0` pushes the branch only |
 | `EUMAEUS_PR_ASSIGNEE` | `EUMAEUS_GH_USER`; empty assigns nobody |

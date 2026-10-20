@@ -43,7 +43,7 @@ export class JobProcess {
   /** Set by run() when .eumaeus.toml names a Dockerfile: the repo image the VM boots. */
   image: string | null = null;
   private child: ChildProcess | null = null;
-  private readonly job: JobRow;
+  readonly job: JobRow;
   private readonly cfg: Config;
   private readonly logPath: string;
   private readonly envPath: string;

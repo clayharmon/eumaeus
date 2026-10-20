@@ -149,23 +149,26 @@ export class Db {
   }
 
   /**
-   * Move the oldest queued job to running, skipping jobs whose branch a running job holds (two pushes to one branch
-   * at once fail the second as a non-fast-forward) and jobs waiting on a job that is still queued or running.
-   * Single-process, synchronous, so this is atomic.
+   * Queued jobs that may start, oldest first: not on a branch a running job holds (two pushes to one branch at once
+   * fail the second as a non-fast-forward), and not waiting on a job that is still queued or running. The scheduler
+   * picks the first that fits its memory budget and claims it. Single-process, synchronous, so the pair is atomic.
    */
-  claimNext(): JobRow | undefined {
-    const row = this.db
+  ready(): JobRow[] {
+    return this.db
       .prepare(
-        `SELECT q.id FROM jobs q WHERE q.status = 'queued' AND NOT EXISTS (
+        `SELECT q.* FROM jobs q WHERE q.status = 'queued' AND NOT EXISTS (
            SELECT 1 FROM jobs r WHERE r.status = 'running' AND r.repo = q.repo COLLATE NOCASE AND r.branch = q.branch
          ) AND NOT EXISTS (
            SELECT 1 FROM json_each(COALESCE(q.after, '[]')) a JOIN jobs w ON w.id = a.value WHERE w.status IN ('queued', 'running')
-         ) ORDER BY q.created_at LIMIT 1`,
+         ) ORDER BY q.created_at`,
       )
-      .get() as { id: string } | undefined;
-    if (!row) return undefined;
-    this.db.prepare(`UPDATE jobs SET status = 'running', started_at = ? WHERE id = ?`).run(now(), row.id);
-    return this.get(row.id);
+      .all() as unknown as JobRow[];
+  }
+
+  /** Move a queued job to running. */
+  claim(id: string): JobRow | undefined {
+    this.db.prepare(`UPDATE jobs SET status = 'running', started_at = ? WHERE id = ? AND status = 'queued'`).run(now(), id);
+    return this.get(id);
   }
 
   /** Queued jobs whose `after` names the given job. */

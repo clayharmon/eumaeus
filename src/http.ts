@@ -48,6 +48,8 @@ export function startHttp(cfg: Config, sched: Scheduler, db: Db, creds: Credenti
         running: sched.activeCount(),
         queued: db.count('queued'),
         paused: sched.paused(),
+        // Memory limits of the running jobs against EUMAEUS_MEMORY_BUDGET; budget_mb is null when it is off.
+        memory: { budget_mb: sched.budgetMb, in_use_mb: sched.inUseMb() },
         commit,
         image: cfg.image,
         image_commit: await imageCommit(cfg.image),
@@ -63,7 +65,7 @@ export function startHttp(cfg: Config, sched: Scheduler, db: Db, creds: Credenti
 
     try {
       const body = req.method === 'POST' ? await readJson(req) : undefined;
-      const mcp = buildMcpServer(sched, db, creds, cfg.secretsFile, commit, inbox.describe());
+      const mcp = buildMcpServer(sched, db, creds, cfg.secretsFile, commit, inbox.describe(), cfg.memoryBudget || null);
       const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
       res.on('close', () => { void transport.close(); void mcp.close(); });
       await mcp.connect(transport);
