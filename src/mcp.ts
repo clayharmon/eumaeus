@@ -26,8 +26,29 @@ function view(j: JobRow, db: Db): Record<string, unknown> {
   };
 }
 
-export function buildMcpServer(sched: Scheduler, db: Db, creds: CredentialSource, secretsFile: string): McpServer {
-  const server = new McpServer({ name: 'eumaeus', version: '0.1.0' });
+/**
+ * What every client's agent reads at the start of a session. Agents remember nothing between sessions, so this and
+ * the tool descriptions say what the dispatcher does now; they are not a changelog.
+ */
+function instructions(inbox: string | null): string {
+  return [
+    'eumaeus runs coding agents in throwaway VMs and pushes their work to GitHub. submit_job returns at once; poll ' +
+      'job_status until the status is pushed, no_changes, failed, or cancelled.',
+    '- Jobs on the same repo and branch run one at a time. A later one waits, then starts from the branch\'s new head.',
+    '- After a push, eumaeus watches CI and may submit a follow-up job to fix a failure (job_status ci.followup).',
+    inbox
+      ? `- Jobs also start from GitHub: ${inbox}. Such a job's job_status has trigger {kind, url, login}, and eumaeus posts the outcome there.`
+      : '- Starting jobs from GitHub labels and mentions is off on this dispatcher.',
+    '- Every VM has a headless Chromium driven by playwright-cli. Screenshots an agent saves show in the PR; ' +
+      'job_status result.screenshots lists their URLs.',
+  ].join('\n');
+}
+
+export function buildMcpServer(
+  sched: Scheduler, db: Db, creds: CredentialSource, secretsFile: string, commit: string | null, inbox: string | null,
+): McpServer {
+  // The commit as semver build metadata, so a client's server list shows which build it reached.
+  const server = new McpServer({ name: 'eumaeus', version: commit ? `0.1.0+${commit}` : '0.1.0' }, { instructions: instructions(inbox) });
 
   server.registerTool(
     'submit_job',
@@ -38,8 +59,10 @@ export function buildMcpServer(sched: Scheduler, db: Db, creds: CredentialSource
         'branch job/<id> and opens a PR. Pass branch= to continue an existing branch/PR instead (the VM checks it out ' +
         'and pushes to it). Returns at once with the job id; poll job_status. Be specific in the task: name files and ' +
         'the expected outcome. The VM has the repo\'s environment from its devenv.nix, devbox.json, .flox, flake.nix, ' +
-        'mise.toml, or .eumaeus.toml (see job_status result.env). Only the pushed branch, the transcript, and the ' +
-        "repo's cached disk outlive the VM.",
+        'mise.toml, or .eumaeus.toml (see job_status result.env), and a headless Chromium (playwright-cli); screenshots ' +
+        'the agent saves show in the PR. While another job runs on the same repo and branch, this one stays queued, ' +
+        "then starts from the branch's new head. Only the pushed branch, the transcript, and the repo's cached disk " +
+        'outlive the VM.',
       inputSchema: {
         repo: z.string().regex(/^[\w.-]+\/[\w.-]+$/).describe('GitHub repo as owner/name'),
         task: z.string().min(1).max(20_000).describe('Instructions for the agent'),
@@ -68,7 +91,10 @@ export function buildMcpServer(sched: Scheduler, db: Db, creds: CredentialSource
       title: 'Job status',
       description:
         'Current state of one job: its result JSON, its branch or PR URL once pushed, and `ci` once pushed: pending, success, ' +
-        'failure, none (no checks), timeout, or unavailable, with each check and, after a failure, the follow-up job id.',
+        'failure, none (no checks), timeout, or unavailable, with each check and, after a failure, the follow-up job id. ' +
+        'A pushed result has new_commits, pr_opened (true when this job opened the PR), and screenshots (image URLs, when ' +
+        'the agent saved any). `trigger` is {kind, url, login} for a job started from GitHub by a label or mention ' +
+        '(kind: label, issue, comment, review-comment, or review), and null otherwise.',
       inputSchema: { job_id: z.string() },
     },
     async ({ job_id }) => {

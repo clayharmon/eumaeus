@@ -78,6 +78,13 @@ export class Inbox {
     setInterval(() => void this.tick(), this.cfg.inboxPollMs).unref();
   }
 
+  /** For the MCP server's instructions: how to start a job from GitHub here, or null when the inbox is off. */
+  describe(): string | null {
+    if (this.off || !this.app) return null;
+    return `the label \`${LABEL}\` on an open issue, or \`@${this.slug}\` in a new issue, an issue or PR comment, an inline ` +
+      `review comment, or a review's body, by ${this.cfg.inboxUsers.join(', ')}, in any repo the GitHub App is installed on`;
+  }
+
   /** For /healthz. */
   status(): Record<string, unknown> {
     if (this.off) return { off: this.off };
