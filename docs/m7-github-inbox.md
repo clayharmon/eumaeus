@@ -1,6 +1,6 @@
 # M7: work from the pull request
 
-Status: plan approved 2026-10-19; next is step 6. Browser measurements are from a spike on an Apple silicon Mac on
+Status: plan approved 2026-10-19; next is step 7. Browser measurements are from a spike on an Apple silicon Mac on
 `container` 1.5.0 with `@playwright/cli` 0.1.22.
 
 ## You review on GitHub, and eumaeus can't hear you there
@@ -462,3 +462,31 @@ What the build changed from the plan:
   00:38:34 took 1.8 s.
 - A reply in a thread goes to the thread's first comment, since GitHub refuses replies to replies.
 - The fork `oreibates/eumaeus-fixtures` stays for later runs.
+
+### Step 6: screenshots
+
+| Check | Result |
+|---|---|
+| The step 1 `web` job, run again, shows its screenshot in the PR on github.com and in GitHub Mobile, on the fixtures repo | job `20261020-005130-da25` (Sonnet 5.5, 6 turns, $0.050) opened PR #15 with `desktop.png` and `mobile-375.png`, and both showed on github.com and in GitHub Mobile. Fetched without a login, the link returned a 375×700 PNG of 19,837 bytes |
+| The same on a private repo | job `20261020-005130-7622` on `clayharmon/eumaeus-fixtures-private` opened PR #1 with 2 screenshots, and both showed on github.com and in GitHub Mobile. Fetched without a login, the link returned `404` |
+| Two jobs saving screenshots at once both land on `eumaeus-screenshots` | `da25` and `fdc4` started 33 ms apart. `da25` pushed `186ce992` on try 1. `fdc4` was rejected with `reference already exists`, then pushed `6c62f264`, whose parent is `186ce992`, on try 2 |
+
+What the build changed from the plan:
+
+- Each screenshot commit holds only its own job's directory, with the branch's last commit as parent. The links name
+  the commit, so they keep working, and the branch tip shows only the newest job. A `--depth=1` fetch of the tip
+  stays at 12 MB or less, however many jobs came before.
+- Jobs no longer use `git clone`. They run `git init`, `git fetch` with the refspec
+  `^refs/heads/eumaeus-screenshots`, and `git checkout`, so the screenshots branch stays out of every clone.
+  `git clone -c remote.origin.fetch=^refs/heads/eumaeus-screenshots` still fetched the branch. A `shell` job's
+  clone afterward listed 21 remote branches, and `eumaeus-screenshots` wasn't one of them.
+- On a PR that's already open, the job posts its screenshots in a comment, because the body belongs to whoever
+  opened the PR. The Check didn't exercise this.
+- Only `*.png` files count. Characters outside `A-Za-z0-9._-` become `_`, and a file over 2 MB is skipped and
+  logged. A local test turned `page 1.png` into `page_1.png` and skipped a 2.2 MB file.
+- In a local test, 4 jobs pushing at once all landed, the last on its 4th try, which is the limit.
+- The job's result gains `screenshots`, a list of the links.
+- In `body_html`, GitHub keeps the `github.com/.../blob/...?raw=true` link as the image source and doesn't proxy it.
+  The viewer's own session loads it, which is why the image works on a private repo.
+- The hand-off asks for PNGs of 2 MB at most.
+- `clayharmon/eumaeus-fixtures-private` stays for later runs.

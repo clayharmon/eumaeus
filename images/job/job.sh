@@ -7,6 +7,7 @@
 #   "Closes #12").
 # Agent runners are asked to write the PR title and body to /work/pr.md (filling the repo's PR template if
 # there is one). The PR is opened from that file; without it the body is the task plus the agent's summary.
+# PNGs an agent saves in /work/screenshots/ go to the branch eumaeus-screenshots and show in the PR.
 # Runner credentials: claude ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN; codex OPENAI_API_KEY or CODEX_API_KEY;
 #   antigravity GEMINI_API_KEY; pi any provider key, e.g. ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY, OPENROUTER_API_KEY.
 # Output: the dispatcher mounts a host directory at /out; the agent's own output stream is written there and
@@ -55,8 +56,13 @@ gh auth setup-git >/dev/null
 log "clone $REPO @ $BASE_BRANCH (image ${EUMAEUS_COMMIT:-unknown})"
 # Three tries, 10 s apart: a VM that boots while the host's network is settling has lost a job in 2 s
 # on "Could not resolve host: github.com" three times in one day, each before any work was done.
-for attempt in 1 2 3; do
-  if git clone -q --branch "$BASE_BRANCH" "https://github.com/$REPO.git" /work/repo 2>/tmp/clone.err; then break; fi
+# init and fetch rather than clone: clone ignores a negative refspec, and the screenshots branch stays out. It only
+# grows, and no job reads it.
+for attempt in 1 2 3 4; do
+  if git init -q /work/repo && git -C /work/repo remote add origin "https://github.com/$REPO.git" \
+     && git -C /work/repo config --add remote.origin.fetch '^refs/heads/eumaeus-screenshots' \
+     && git -C /work/repo fetch -q origin 2>/tmp/clone.err \
+     && git -C /work/repo checkout -q -B "$BASE_BRANCH" --track "origin/$BASE_BRANCH" 2>>/tmp/clone.err; then break; fi
   rm -rf /work/repo
   if [ "$attempt" = 3 ]; then cat /tmp/clone.err >&2; log "clone failed 3 times"; emit failed ',"error":"clone_failed"'; exit 2; fi
   log "clone attempt $attempt failed: $(tr -d '\n' < /tmp/clone.err | cut -c1-200); retrying in 10 s"
@@ -292,7 +298,7 @@ if [ "$RUNNER" != shell ]; then
   # `|| true`: find exits 1 when .github or docs is missing, and set -e would end the job here.
   PR_TEMPLATE="$(find . .github docs -maxdepth 1 -iname 'pull_request_template.md' 2>/dev/null | head -n1 | sed 's#^\./##' || true)"
   mkdir -p /work/screenshots
-  handoff="A headless Chromium is available through \`playwright-cli\`; run \`playwright-cli --help\`. If your change affects what a browser renders, start the app, check the page, and save up to 6 screenshots to /work/screenshots/."
+  handoff="A headless Chromium is available through \`playwright-cli\`; run \`playwright-cli --help\`. If your change affects what a browser renders, start the app, check the page, and save up to 6 PNG screenshots, 2 MB at most each, to /work/screenshots/. The pull request shows them."
   handoff="$handoff When the work is done, write the pull request description to $PR_FILE: line 1 is the PR title (72 characters max), then a blank line, then the body in Markdown."
   [ -n "$PR_TEMPLATE" ] && handoff="$handoff The repository's PR template is at $PR_TEMPLATE; fill it in."
   handoff="$handoff $PR_FILE is outside the repository, so it is not committed. The harness pushes the branch and opens the pull request from that file unless one is already open."
@@ -325,11 +331,51 @@ fi
 git push -q -u origin "$BRANCH"
 log "pushed $BRANCH ($NEW_COMMITS new commit(s))"
 
+# Screenshots go under $JOB_ID/ on an orphan branch, never on $BRANCH, so a squash merge carries none. Each commit
+# holds one job's files, with the branch's last commit as parent: the links name the commit, and a fetch of the
+# tip stays small. Another job pushing first rejects the push; fetch its commit and retry, 3 times.
+SHOTS_BRANCH=eumaeus-screenshots; SHOTS_SHA=""; SHOTS=()
+save_screenshots() {
+  local f name sub root parent commit entries=() p
+  for f in /work/screenshots/*.png; do
+    [ -f "$f" ] || continue
+    if [ "${#SHOTS[@]}" -ge 6 ]; then log "screenshots: kept the first 6"; break; fi
+    if [ "$(wc -c < "$f")" -gt 2097152 ]; then log "screenshot $(basename "$f") is over 2 MB: skipped"; continue; fi
+    name="$(basename "$f" | tr -c 'A-Za-z0-9._\n-' '_')"
+    entries+=("100644 blob $(git hash-object -w "$f")"$'\t'"$name"); SHOTS+=("$name")
+  done
+  [ "${#SHOTS[@]}" -gt 0 ] || return 0
+  sub="$(printf '%s\n' "${entries[@]}" | git mktree)"
+  for attempt in 1 2 3 4; do
+    parent=""; p=()
+    if git fetch -q --depth=1 origin "+refs/heads/$SHOTS_BRANCH:refs/remotes/origin/$SHOTS_BRANCH" 2>/dev/null; then
+      parent="$(git rev-parse "origin/$SHOTS_BRANCH")"; p=(-p "$parent")
+    fi
+    root="$(printf '040000 tree %s\t%s\n' "$sub" "$JOB_ID" | git mktree)"
+    commit="$(git commit-tree "$root" "${p[@]}" -m "screenshots from eumaeus job $JOB_ID")"
+    if git push -q origin "$commit:refs/heads/$SHOTS_BRANCH" 2>/tmp/shots.err; then
+      SHOTS_SHA="$commit"; log "screenshots: ${#SHOTS[@]} on $SHOTS_BRANCH at ${commit:0:8}, try $attempt"; return 0
+    fi
+    log "screenshots push $attempt failed: $(tr '\n' ' ' < /tmp/shots.err | head -c 300)"
+  done
+  SHOTS=()
+}
+save_screenshots
+shots_md() {
+  printf '### Screenshots\n'
+  for n in "${SHOTS[@]}"; do printf '\n![%s](https://github.com/%s/blob/%s/%s/%s?raw=true)\n' "$n" "$REPO" "$SHOTS_SHA" "$JOB_ID" "$n"; done
+}
+
 PR_URL=""; PR_OPENED=""
 assign=(); [ -n "${PR_ASSIGNEE:-}" ] && assign=(--assignee "$PR_ASSIGNEE")
 if [ "$OPEN_PR" = "1" ] && PR_URL="$(gh pr view "$BRANCH" --repo "$REPO" --json url -q .url 2>/dev/null)" && [ -n "$PR_URL" ]; then
   log "pr already open: $PR_URL"
   [ ${#assign[@]} -gt 0 ] && { gh pr edit "$PR_URL" --add-assignee "$PR_ASSIGNEE" >/dev/null 2>/tmp/pr.err || log "assign failed: $(cat /tmp/pr.err)"; }
+  # The body belongs to whoever opened the PR, so this job's screenshots go in a comment.
+  if [ -n "$SHOTS_SHA" ]; then
+    gh pr comment "$PR_URL" --body "$(shots_md)"$'\n\n'"From eumaeus job \`$JOB_ID\`." >/dev/null 2>/tmp/shots.err \
+      || log "screenshots comment failed: $(head -c 300 /tmp/shots.err)"
+  fi
 elif [ "$OPEN_PR" = "1" ]; then
   title=""; body=""
   if [ -s "$PR_FILE" ]; then
@@ -350,6 +396,7 @@ elif [ "$OPEN_PR" = "1" ]; then
     # shellcheck disable=SC2016
     run="$(printf '\n\n## Run\n\n- job: `%s`\n- runner: %s\n- requested model: %s\n- %s\n' "$JOB_ID" "$RUNNER" "${MODEL:-default}" "${COST_LINE:-no cost data}")"
   fi
+  [ -n "$SHOTS_SHA" ] && body="$body"$'\n\n'"$(shots_md)"
   body="$body$run"
   [ -n "${PR_FOOTER:-}" ] && body="$body"$'\n\n'"$PR_FOOTER"
   if PR_URL="$(gh pr create --repo "$REPO" --base "$BASE_BRANCH" --head "$BRANCH" --title "$title" --body "$body" "${assign[@]}" 2>/tmp/pr.err)"; then
@@ -367,4 +414,5 @@ extra=",\"branch\":\"$BRANCH\",\"commit\":\"$(git rev-parse HEAD)\",\"files\":$(
 extra="$extra,\"new_commits\":$NEW_COMMITS"
 [ -n "$PR_URL" ] && extra="$extra,\"pr_url\":\"$PR_URL\""
 [ -n "$PR_OPENED" ] && extra="$extra,\"pr_opened\":true"
+[ -n "$SHOTS_SHA" ] && extra="$extra,\"screenshots\":$(for n in "${SHOTS[@]}"; do printf 'https://github.com/%s/blob/%s/%s/%s?raw=true\n' "$REPO" "$SHOTS_SHA" "$JOB_ID" "$n"; done | jq -R . | jq -sc .)"
 emit pushed "$extra"
