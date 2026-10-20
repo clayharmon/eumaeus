@@ -41,7 +41,8 @@ function instructions(inbox: string | null): string {
     '- submit_job after=<job id or ids> holds a job, on any branch, until those jobs end. It starts once each ended ' +
       'with a status in after_status (default pushed or no_changes); otherwise it ends cancelled with ' +
       '"after <id> ended <status>", and so do the jobs behind it, without booting a VM.',
-    '- After a push, eumaeus watches CI and may submit a follow-up job to fix a failure (job_status ci.followup).',
+    '- After a push, eumaeus watches CI and may submit a follow-up job to fix a failure (job_status ci.followup). ' +
+      'An agent that runs CI itself can write /work/ci.json; it becomes the commit status eumaeus/ci, the agent\'s own claim.',
     inbox
       ? `- Jobs also start from GitHub: ${inbox}. Such a job's job_status has trigger {kind, url, login}, and eumaeus posts the outcome there.`
       : '- Starting jobs from GitHub labels and mentions is off on this dispatcher.',
@@ -116,7 +117,8 @@ export function buildMcpServer(
         'failure, none (no checks), timeout, or unavailable, with each check and, after a failure, the follow-up job id. ' +
         'A pushed result has new_commits, pr_opened (true when this job opened the PR), and screenshots (image URLs, when ' +
         'the agent saved any). A no_changes result has pr_url when a PR is open on the branch. A job submitted with ' +
-        'pr_body has pr_edited: whether it replaced the PR body. `trigger` is {kind, url, login} for a job started from GitHub by a label or mention ' +
+        'pr_body has pr_edited: whether it replaced the PR body. A job that wrote /work/ci.json has ci_reported: {state, sha, ' +
+        'description} for the eumaeus/ci commit status it posted, or {error}. `trigger` is {kind, url, login} for a job started from GitHub by a label or mention ' +
         '(kind: label, issue, comment, review-comment, or review), and null otherwise. `after` and `after_status` are the ' +
         'jobs this one waits for and the statuses that let it start; a job cancelled by a chain has error "after <id> ended <status>".',
       inputSchema: { job_id: z.string() },

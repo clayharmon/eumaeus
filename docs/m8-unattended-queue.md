@@ -1,6 +1,6 @@
 # M8: a queue nobody watches
 
-Status: steps 1 to 3 built; steps 4 to 8 planned. Evidence is from the 33 hermesmoney jobs of 2026-10-20, ids `20261020-002321-1929`
+Status: steps 1 to 4 built; steps 5 to 8 planned. Evidence is from the 33 hermesmoney jobs of 2026-10-20, ids `20261020-002321-1929`
 to `20261020-004138-2a54`, read with `job_status`, `job_logs`, and `job_transcript`.
 
 ## The wave loop queues 33 jobs at night and fixes their output by hand in the morning
@@ -401,3 +401,29 @@ What the build changed from the plan:
 - `after_status` accepts terminal statuses only, and `after` takes 20 ids at most.
 - `submit_job` returns the row after the check, so a job cancelled at submit reads `cancelled` in the reply.
 - The README gains a "Chains" section.
+
+### Step 4: `eumaeus/ci` commit status
+
+All on PR #18 of the fixtures repo, branch `m8-pr-body`, as `shell` jobs that write `/work/ci.json`.
+
+| Check | Result |
+|---|---|
+| A job writes `success`; the PR shows a green `eumaeus/ci`, and `job_status` shows `ci.status: success` within 60 s | job `20261020-140640-096a` pushed `4b2d402e` and posted `eumaeus/ci` `success` with the description `7/7 steps, 1,077 vitest and 783 cargo tests` and the PR as `target_url`, 10.2 s from VM start to exit. The watcher settled `ci.status: success` 47 s after the job finished |
+| Another writes `failure` and shows red | job `20261020-140742-a67f` pushed `baf6dfad` and posted `failure`, `step 5 of 7 failed: 2 vitest tests`. GitHub's combined state for the commit was `failure`. The watcher settled `failure` 48 s later with the note `shell jobs are watched, not fixed` |
+| A `no_changes` job posts on the branch head | job `20261020-140844-12cf`, no commit, posted `success` on `baf6dfad`, the branch head, which `ci_reported.sha` names. The commit's combined state went from `failure` to `success` |
+| A job whose `sha` is not `HEAD` gets the `agent tested` prefix | job `20261020-140855-c74d` wrote `sha: baf6dfad` and a commit; `job.sh` committed `718fcc5d` and posted on it with the description `agent tested baf6dfa; tested before the harness commit` |
+| Without the permission, from the edge cases | before the change, job `20261020-140238-d2b6` pushed `d92483c2` and its result had `ci_reported: {error: "gh: Resource not accessible by integration (HTTP 403)"}` |
+
+The permission change was made by hand on `you-eumaeus`: Commit statuses to Read and write, accepted on the
+installation. The next job's token had it.
+
+What the build changed from the plan:
+
+- A `no_changes` job on a branch that was never pushed sits on the base's commit, so nothing is posted and
+  `ci_reported.error` says `nothing pushed: HEAD is the base branch's commit`. Otherwise a status meant for the branch
+  would land on `main`.
+- `ci.json` with no `description` posts `reported by eumaeus job <id>`.
+- `sha` may be short: it matches `HEAD` as a prefix.
+- The description is cut at 140 characters by jq, which counts characters rather than bytes.
+- `ci_reported.sha` is the commit the status went on, `HEAD`, not the agent's `sha`.
+- README's CI section describes `ci.json`, and the permission paragraph now asks for Commit statuses write.

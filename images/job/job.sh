@@ -8,6 +8,8 @@
 # Agent runners are asked to write the PR title and body to /work/pr.md (filling the repo's PR template if
 # there is one). The PR is opened from that file; without it the body is the task plus the agent's summary.
 # PNGs an agent saves in /work/screenshots/ go to the branch eumaeus-screenshots and show in the PR.
+# /work/ci.json, {"state": "success"|"failure", "description": "...", "sha": optional}, written by any runner, is
+#   posted as the commit status eumaeus/ci on the commit this job leaves at HEAD. It is the agent's claim, not a run.
 # Runner credentials: claude ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN; codex OPENAI_API_KEY or CODEX_API_KEY;
 #   antigravity GEMINI_API_KEY; pi any provider key, e.g. ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY, OPENROUTER_API_KEY.
 # Output: the dispatcher mounts a host directory at /out; the agent's own output stream is written there and
@@ -295,6 +297,7 @@ usage_json() {
 
 # Ask agent runners for the PR description. Never for `shell`, whose TASK is a command line.
 PR_FILE=/work/pr.md
+CI_JSON=/work/ci.json
 AGENT_TASK="$TASK"
 if [ "$RUNNER" != shell ]; then
   # `|| true`: find exits 1 when .github or docs is missing, and set -e would end the job here.
@@ -304,6 +307,7 @@ if [ "$RUNNER" != shell ]; then
   handoff="$handoff A headless Chromium is available through \`playwright-cli\`; run \`playwright-cli --help\`. If your change affects what a browser renders, start the app, check the page, and save up to 6 PNG screenshots, 2 MB at most each, to /work/screenshots/. The pull request shows them."
   handoff="$handoff When the work is done, write the pull request description to $PR_FILE: line 1 is the PR title (72 characters max), then a blank line, then the body in Markdown."
   [ -n "$PR_TEMPLATE" ] && handoff="$handoff The repository's PR template is at $PR_TEMPLATE; fill it in."
+  handoff="$handoff To report the CI you ran, write $CI_JSON as {\"state\": \"success\" or \"failure\", \"description\": \"<what ran, 140 characters at most>\"}; the harness posts it as the commit status \`eumaeus/ci\` on the commit it pushes."
   if [ "${PR_BODY:-}" = replace ]; then
     handoff="$handoff $PR_FILE is outside the repository, so it is not committed. The harness pushes the branch and opens the pull request from that file, or, when one is already open, replaces its title and body with that file."
   else
@@ -439,10 +443,45 @@ elif [ "$OPEN_PR" = "1" ] && [ "$NEW_COMMITS" != 0 ]; then
   fi
 fi
 
+# The agent's own CI result, as the commit status eumaeus/ci on HEAD, the commit this job pushed or found. It goes on
+# HEAD rather than the sha the agent wrote: the commit above may have added what the agent left uncommitted, so the
+# description then says which commit the agent tested. The push stands whether or not the post works.
+CI_REPORTED=""
+report_ci() {
+  local head state sha desc err
+  head="$(git rev-parse HEAD)"
+  state="$(jq -r 'if type == "object" then .state // "" else "" end' "$CI_JSON" 2>/dev/null || true)"
+  sha="$(jq -r 'if type == "object" then .sha // "" else "" end' "$CI_JSON" 2>/dev/null || true)"
+  desc="$(jq -r 'if type == "object" then .description // "" else "" end' "$CI_JSON" 2>/dev/null || true)"
+  if [ "$state" != success ] && [ "$state" != failure ]; then
+    err="ci.json state must be success or failure, got '$(printf '%s' "$state" | head -c 40)'"
+    log "ci: $err; nothing posted"; CI_REPORTED="$(jq -cn --arg e "$err" '{error: $e}')"; return 0
+  fi
+  [ -n "$desc" ] || desc="reported by eumaeus job $JOB_ID"
+  case "$head" in "$sha"*) ;; *) desc="agent tested ${sha:0:7}; $desc" ;; esac
+  desc="$(jq -rn --arg d "$desc" '$d[:140]')"  # GitHub's limit, in characters
+  local args=(-X POST "repos/$REPO/statuses/$head" -f "state=$state" -f context=eumaeus/ci -f "description=$desc")
+  [ -n "$PR_URL" ] && args+=(-f "target_url=$PR_URL")
+  if gh api "${args[@]}" >/dev/null 2>/tmp/ci.err; then
+    log "ci: eumaeus/ci $state on ${head:0:8}: $desc"
+    CI_REPORTED="$(jq -cn --arg s "$state" --arg sha "$head" --arg d "$desc" '{state: $s, sha: $sha, description: $d}')"
+  else
+    err="$(tr '\n' ' ' < /tmp/ci.err | head -c 300)"
+    log "ci: post failed: $err"; CI_REPORTED="$(jq -cn --arg e "$err" '{error: $e}')"
+  fi
+}
+if [ -s "$CI_JSON" ]; then
+  # A job that pushed nothing to a branch that was never pushed sits on the base's commit; a status there would be on main.
+  if [ "$NEW_COMMITS" != 0 ] || [ "$UPSTREAM" = "origin/$BRANCH" ]; then report_ci
+  else log "ci: $BRANCH was never pushed and this job pushed nothing, so HEAD is $BASE_BRANCH's; nothing posted"; CI_REPORTED='{"error":"nothing pushed: HEAD is the base branch'"'"'s commit"}'
+  fi
+fi
+
 extra=""
 [ -n "$PR_URL" ] && extra="$extra,\"pr_url\":\"$PR_URL\""
 [ -n "$PR_OPENED" ] && extra="$extra,\"pr_opened\":true"
 [ "${PR_BODY:-}" = replace ] && extra="$extra,\"pr_edited\":$([ -n "$PR_EDITED" ] && echo true || echo false)"
+[ -n "$CI_REPORTED" ] && extra="$extra,\"ci_reported\":$CI_REPORTED"
 if [ "$NEW_COMMITS" = 0 ]; then emit no_changes "$extra"; exit 0; fi
 # Files the branch changes relative to the base (three-dot), so a merge from base doesn't list base's files.
 extra="$extra,\"branch\":\"$BRANCH\",\"commit\":\"$(git rev-parse HEAD)\",\"files\":$(git diff --name-only "origin/$BASE_BRANCH...HEAD" | jq -R . | jq -sc .)"

@@ -25,8 +25,8 @@ const manifest = {
     contents: 'write', pull_requests: 'write', workflows: 'write', metadata: 'read',
     // src/inbox.ts removes the label, reacts, and replies on issues and PRs.
     issues: 'write',
-    // src/ci.ts reads check runs, commit statuses, and Actions job logs.
-    checks: 'read', statuses: 'read', actions: 'read',
+    // src/ci.ts reads check runs, commit statuses, and Actions job logs; job.sh posts the status eumaeus/ci.
+    checks: 'read', statuses: 'write', actions: 'read',
   },
   default_events: [],
 };
@@ -44,7 +44,7 @@ const server = createServer(async (req, res) => {
     res.writeHead(200, { 'content-type': 'text/html' });
     res.end(page(`<h1>Create the eumaeus GitHub App</h1>
 <p>This posts the app definition to GitHub. On the next page, change the name if "${APP_NAME}" is taken, then click <b>Create GitHub App</b>.</p>
-<p>Permissions: contents, pull requests, workflows, issues (write); metadata, checks, commit statuses, actions (read). No webhook.</p>
+<p>Permissions: contents, pull requests, workflows, issues, commit statuses (write); metadata, checks, actions (read). No webhook.</p>
 <form method="post" action="${createUrl}"><input type="hidden" name="manifest" value='${JSON.stringify(manifest).replaceAll("'", '&#39;')}'>
 <button style="font-size:1.1em;padding:.5em 1em">Continue to GitHub</button></form>`));
     return;

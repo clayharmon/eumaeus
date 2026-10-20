@@ -18,6 +18,7 @@ Limits:
 - [Starting jobs from GitHub](#starting-jobs-from-github) turns issue and PR text into agent instructions. `EUMAEUS_INBOX_USERS` is the only gate: an issue a stranger wrote becomes a task once a listed user labels it. The VM's token can push to any branch of its repo for an hour, the default branch included unless branch protection stops it. Protect the default branch on repos the inbox watches.
 - The inbox needs the GitHub App with Issues read and write, and it mints tokens for every repo of an installation. They stay on the host.
 - Every VM carries a headless Chromium. One open page took 937 MB of the VM's 4 GB, before the app's dev server and the agent; a repo with a heavy dev server may need `EUMAEUS_MEMORY=6G`.
+- The commit status `eumaeus/ci` repeats what the agent wrote to `/work/ci.json`. It is not an independent run, and a branch rule that requires it is satisfied by the agent's own claim.
 
 ## What a job does
 
@@ -131,7 +132,9 @@ When a check fails and the job has fix attempts left, eumaeus submits a follow-u
 - `shell` jobs are watched and never fixed.
 - A cancelled or stale check is recorded, not sent for a fix.
 
-The GitHub App needs read access to Checks, Commit statuses, and Actions. `node scripts/github-app-setup.ts` asks for it on a new app. An app created before this change lacks it: on the app's settings page, under Permissions & events, set those three to Read-only and save, then accept the new permissions on the installation, which GitHub links to by email.
+A job can report the CI it ran itself, for a repo with Actions off. The agent writes `/work/ci.json` as `{"state": "success", "description": "7/7 steps, 1,077 vitest and 783 cargo tests"}`, with `state` `success` or `failure` and an optional `sha`; agent runners are told so. After the push, or on the branch head a `no_changes` job found, the job posts it as the commit status `eumaeus/ci`, with the description cut at 140 characters and the PR as its link. The status goes on the commit the job pushed, which may include what the agent left uncommitted; when the agent's `sha` names another commit, the description starts `agent tested <sha>;`. The result shows `ci_reported: {state, sha, description}`, or `ci_reported: {error}` when the state is invalid or the post fails; the push stands either way. The watcher reads it like any status, so `ci.status` settles 30 to 60 s after the push, and a `failure` with `ci_fix` above 0 gets a fix job whose task is the description. It is the agent's claim, not a run; see Limits.
+
+The GitHub App needs read access to Checks and Actions and write access to Commit statuses. `node scripts/github-app-setup.ts` asks for it on a new app. An app created before this change lacks it: on the app's settings page, under Permissions & events, set Checks and Actions to Read-only and Commit statuses to Read and write, save, then accept the new permissions on the installation, which GitHub links to by email. Without the write, the status post gets a 403, which lands in `ci_reported.error`.
 
 ## Chains
 
