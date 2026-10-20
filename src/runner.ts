@@ -114,7 +114,7 @@ export class JobProcess {
       '-e', `RUNNER=${j.runner}`, '-e', `MODEL=${j.model ?? ''}`,
       '-e', `BASE_BRANCH=${j.base_branch}`, '-e', `BRANCH=${j.branch}`,
       '-e', `OPEN_PR=${this.cfg.openPr ? '1' : '0'}`, '-e', `PR_ASSIGNEE=${this.cfg.prAssignee}`,
-      '-e', `PR_FOOTER=${j.pr_footer ?? ''}`,
+      '-e', `PR_FOOTER=${j.pr_footer ?? ''}`, '-e', `PR_BODY=${j.pr_body ?? ''}`,
       ...envArgs(toml),
       '--env-file', this.envPath,
       // Bind mount: the agent's transcript lands here and outlives the VM.

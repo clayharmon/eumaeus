@@ -22,6 +22,8 @@ export interface SubmitInput {
   parent_id?: string | undefined;
   /** Set by the inbox: `Closes #<n>` for a job from an issue. */
   pr_footer?: string | undefined;
+  /** `replace`: the job rewrites the open PR's title and body from the /work/pr.md it writes, with no commit needed. */
+  pr_body?: 'replace' | undefined;
 }
 
 export class Scheduler {
@@ -66,6 +68,7 @@ export class Scheduler {
       parent_id: input.parent_id ?? null,
       ci_fix: input.ci_fix ?? this.cfg.ciFix,
       pr_footer: input.pr_footer ?? null,
+      pr_body: input.pr_body ?? null,
     });
     queueMicrotask(() => this.pump());
     return row;

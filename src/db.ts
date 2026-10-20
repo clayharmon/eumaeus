@@ -35,6 +35,8 @@ export interface JobRow {
   ci: string | null;
   /** Appended to the body of a PR the job opens, e.g. `Closes #12` for a job from an issue. */
   pr_footer: string | null;
+  /** `replace`: the job rewrites the open PR's title and body from /work/pr.md. Null: the body belongs to whoever opened the PR. */
+  pr_body: string | null;
 }
 
 /** A GitHub event the inbox turned into a job or a reply (src/inbox.ts). One row per event, ever. */
@@ -58,11 +60,11 @@ export interface TriggerRow {
   replied_at: string | null;
 }
 
-export type NewJob = Pick<JobRow, 'id' | 'repo' | 'task' | 'runner' | 'model' | 'base_branch' | 'branch' | 'cpus' | 'memory' | 'parent_id' | 'ci_fix' | 'pr_footer'>;
+export type NewJob = Pick<JobRow, 'id' | 'repo' | 'task' | 'runner' | 'model' | 'base_branch' | 'branch' | 'cpus' | 'memory' | 'parent_id' | 'ci_fix' | 'pr_footer' | 'pr_body'>;
 export type NewTrigger = Omit<TriggerRow, 'eyes_id' | 'created_at' | 'replied_at'>;
 
 /** Columns added after M4; an older database gets them on open. */
-const ADDED_COLUMNS: Record<string, string> = { parent_id: 'TEXT', ci_fix: 'INTEGER', ci_status: 'TEXT', ci: 'TEXT', pr_footer: 'TEXT' };
+const ADDED_COLUMNS: Record<string, string> = { parent_id: 'TEXT', ci_fix: 'INTEGER', ci_status: 'TEXT', ci: 'TEXT', pr_footer: 'TEXT', pr_body: 'TEXT' };
 
 const now = (): string => new Date().toISOString();
 
@@ -120,10 +122,10 @@ export class Db {
   insert(j: NewJob): JobRow {
     this.db
       .prepare(
-        `INSERT INTO jobs (id, repo, task, runner, model, base_branch, branch, cpus, memory, parent_id, ci_fix, pr_footer, status, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?)`,
+        `INSERT INTO jobs (id, repo, task, runner, model, base_branch, branch, cpus, memory, parent_id, ci_fix, pr_footer, pr_body, status, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?)`,
       )
-      .run(j.id, j.repo, j.task, j.runner, j.model, j.base_branch, j.branch, j.cpus, j.memory, j.parent_id, j.ci_fix, j.pr_footer, now());
+      .run(j.id, j.repo, j.task, j.runner, j.model, j.base_branch, j.branch, j.cpus, j.memory, j.parent_id, j.ci_fix, j.pr_footer, j.pr_body, now());
     return this.get(j.id) as JobRow;
   }
 

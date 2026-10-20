@@ -34,7 +34,8 @@ function instructions(inbox: string | null): string {
   return [
     'eumaeus runs coding agents in throwaway VMs and pushes their work to GitHub. submit_job returns at once; poll ' +
       'job_status until the status is pushed, no_changes, failed, or cancelled.',
-    '- Jobs on the same repo and branch run one at a time. A later one waits, then starts from the branch\'s new head.',
+    '- Jobs on the same repo and branch run one at a time. A later one waits, then starts from the branch\'s new head. ' +
+      'It leaves the open PR\'s body alone unless submitted with pr_body: "replace".',
     '- After a push, eumaeus watches CI and may submit a follow-up job to fix a failure (job_status ci.followup).',
     inbox
       ? `- Jobs also start from GitHub: ${inbox}. Such a job's job_status has trigger {kind, url, login}, and eumaeus posts the outcome there.`
@@ -57,7 +58,8 @@ export function buildMcpServer(
       description:
         'Queue a coding task. A fresh VM clones <repo> at <base_branch>, runs the agent on <task>, commits, and pushes ' +
         'branch job/<id> and opens a PR. Pass branch= to continue an existing branch/PR instead (the VM checks it out ' +
-        'and pushes to it). Returns at once with the job id; poll job_status. Be specific in the task: name files and ' +
+        'and pushes to it; the PR body stays unless pr_body="replace"). Returns at once with the job id; poll ' +
+        'job_status. Be specific in the task: name files and ' +
         'the expected outcome. The VM has the repo\'s environment from its devenv.nix, devbox.json, .flox, flake.nix, ' +
         'mise.toml, or .eumaeus.toml (see job_status result.env), and a headless Chromium (playwright-cli); screenshots ' +
         'the agent saves show in the PR. While another job runs on the same repo and branch, this one stays queued, ' +
@@ -76,6 +78,10 @@ export function buildMcpServer(
         ci_fix: z.number().int().min(0).max(3).optional().describe(
           'Follow-up jobs eumaeus may submit, one at a time, when CI fails on what this job pushed. Default EUMAEUS_CI_FIX (1). ' +
           '0 watches CI and records the result without fixing; use it when you handle CI yourself.'),
+        pr_body: z.enum(['replace']).optional().describe(
+          'replace: when a PR is already open on the branch, the job rewrites its title and body from the /work/pr.md ' +
+          'the agent writes, with the job\'s own screenshots and run block, even when the job pushes nothing (no_changes). ' +
+          'Default: a job on an open PR leaves the body alone. A job that pushes with no PR open opens one either way.'),
       },
     },
     async (args) => {
@@ -93,7 +99,8 @@ export function buildMcpServer(
         'Current state of one job: its result JSON, its branch or PR URL once pushed, and `ci` once pushed: pending, success, ' +
         'failure, none (no checks), timeout, or unavailable, with each check and, after a failure, the follow-up job id. ' +
         'A pushed result has new_commits, pr_opened (true when this job opened the PR), and screenshots (image URLs, when ' +
-        'the agent saved any). `trigger` is {kind, url, login} for a job started from GitHub by a label or mention ' +
+        'the agent saved any). A no_changes result has pr_url when a PR is open on the branch. A job submitted with ' +
+        'pr_body has pr_edited: whether it replaced the PR body. `trigger` is {kind, url, login} for a job started from GitHub by a label or mention ' +
         '(kind: label, issue, comment, review-comment, or review), and null otherwise.',
       inputSchema: { job_id: z.string() },
     },

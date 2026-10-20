@@ -24,7 +24,7 @@ Limits:
 1. `submit_job(repo, task)` queues the job in SQLite and returns its id at once.
 2. The dispatcher boots a VM from the job image. At most `EUMAEUS_MAX_CONCURRENT` (default 2) run at a time.
 3. The VM clones the repo, sets up the repo's [environment](#environments), runs the agent on the task, commits, and pushes `job/<id>`.
-4. It opens a PR with the title and body the agent wrote to `/work/pr.md`, using the repo's PR template if it has one. Screenshots the agent saved show in the body; see [Browser](#browser).
+4. It opens a PR with the title and body the agent wrote to `/work/pr.md`, using the repo's PR template if it has one. Screenshots the agent saved show in the body; see [Browser](#browser). A job on a branch whose PR is already open leaves the body alone, unless it was submitted with `pr_body: "replace"`: then its `pr.md` becomes the PR's title and body, with the job's own screenshots and run block, and it does so even when it pushed nothing.
 5. The VM is deleted. The pushed branch, the PR, the job log, the agent's transcript, and the repo's disk are all that remain. Logs and transcripts stay in `~/.local/share/eumaeus` until you delete them.
 6. The dispatcher watches [CI](#ci) on the pushed commit and can send a failure to a follow-up job.
 
@@ -172,14 +172,14 @@ Setup:
 
 Every VM has Playwright's Chromium and [`playwright-cli`](https://www.npmjs.com/package/@playwright/cli) 0.1.22, so an agent can start the app, open a page at 375 px, and look. Agent runners are told so, and asked to save up to 6 PNG screenshots, 2 MB at most each, to `/work/screenshots/`.
 
-After the push, the job commits them under `<job id>/` on the branch `eumaeus-screenshots`, one job per commit, and the PR body shows them. On a PR that was already open, they go in a comment. The PR's own branch never holds one, so a squash merge carries none. The images render on github.com and in GitHub Mobile, on private repos too, for anyone who can see the repo. Clones leave `eumaeus-screenshots` out, so it doesn't slow them as it grows.
+After the push, the job commits them under `<job id>/` on the branch `eumaeus-screenshots`, one job per commit, and the PR body shows them. On a PR that was already open, they go in a comment, or in the body when the job replaces it with `pr_body`. The PR's own branch never holds one, so a squash merge carries none. The images render on github.com and in GitHub Mobile, on private repos too, for anyone who can see the repo. Clones leave `eumaeus-screenshots` out, so it doesn't slow them as it grows.
 
 ## MCP tools
 
 | Tool | What it does |
 |---|---|
-| `submit_job(repo, task, runner?, model?, base_branch?, branch?, cpus?, memory?, ci_fix?)` | Queues a job. Pass `branch` to name the branch: an existing one, such as a PR head, is continued, and a new name is created from `base_branch`. Pass `ci_fix` to change how many follow-ups a CI failure may start. |
-| `job_status(job_id)` | Returns `queued`, `running`, `pushed`, `no_changes`, `failed`, or `cancelled`, plus the PR URL, `result.usage` (cost and turns for `claude`, token counts for `codex` and `antigravity`), `ci` once pushed, and `trigger` for a job started from GitHub. |
+| `submit_job(repo, task, runner?, model?, base_branch?, branch?, cpus?, memory?, ci_fix?, pr_body?)` | Queues a job. Pass `branch` to name the branch: an existing one, such as a PR head, is continued, and a new name is created from `base_branch`. Pass `ci_fix` to change how many follow-ups a CI failure may start. Pass `pr_body: "replace"` to have a job on an open PR rewrite the PR's title and body from its `/work/pr.md`. |
+| `job_status(job_id)` | Returns `queued`, `running`, `pushed`, `no_changes`, `failed`, or `cancelled`, plus the PR URL, `result.usage` (cost and turns for `claude`, token counts for `codex` and `antigravity`), `result.pr_edited` for a job with `pr_body`, `ci` once pushed, and `trigger` for a job started from GitHub. |
 | `job_logs(job_id, tail?)` | Tails the log. `claude` and `codex` add one `[agent]` line per tool call as they run. |
 | `job_transcript(job_id, tail?, grep?)` | Returns the agent's own output stream, kept after the VM is gone. Use it to check what the agent actually ran. |
 | `cancel_job(job_id)` | Cancels a queued job, or stops a running one and removes its VM. |

@@ -4,7 +4,7 @@
 # Optional env: BASE_BRANCH (main), BRANCH (job/$JOB_ID), RUNNER (claude|codex|antigravity|pi|shell), MODEL,
 #   GIT_AUTHOR_NAME/GIT_AUTHOR_EMAIL (commit identity), OPEN_PR (1 = open a pull request after push),
 #   PR_ASSIGNEE (GitHub login to assign the PR to), PR_FOOTER (appended to the body of a PR this job opens, e.g.
-#   "Closes #12").
+#   "Closes #12"), PR_BODY (replace = rewrite the open PR's title and body from /work/pr.md, even with no commit).
 # Agent runners are asked to write the PR title and body to /work/pr.md (filling the repo's PR template if
 # there is one). The PR is opened from that file; without it the body is the task plus the agent's summary.
 # PNGs an agent saves in /work/screenshots/ go to the branch eumaeus-screenshots and show in the PR.
@@ -301,9 +301,13 @@ if [ "$RUNNER" != shell ]; then
   handoff="A headless Chromium is available through \`playwright-cli\`; run \`playwright-cli --help\`. If your change affects what a browser renders, start the app, check the page, and save up to 6 PNG screenshots, 2 MB at most each, to /work/screenshots/. The pull request shows them."
   handoff="$handoff When the work is done, write the pull request description to $PR_FILE: line 1 is the PR title (72 characters max), then a blank line, then the body in Markdown."
   [ -n "$PR_TEMPLATE" ] && handoff="$handoff The repository's PR template is at $PR_TEMPLATE; fill it in."
-  handoff="$handoff $PR_FILE is outside the repository, so it is not committed. The harness pushes the branch and opens the pull request from that file unless one is already open."
+  if [ "${PR_BODY:-}" = replace ]; then
+    handoff="$handoff $PR_FILE is outside the repository, so it is not committed. The harness pushes the branch and opens the pull request from that file, or, when one is already open, replaces its title and body with that file."
+  else
+    handoff="$handoff $PR_FILE is outside the repository, so it is not committed. The harness pushes the branch and opens the pull request from that file unless one is already open."
+  fi
   AGENT_TASK="$TASK"$'\n\n'"---"$'\n'"Hand-off from the eumaeus harness, not from the requester: $handoff"
-  log "pr description requested at $PR_FILE${PR_TEMPLATE:+ (template: $PR_TEMPLATE)}"
+  log "pr description requested at $PR_FILE${PR_TEMPLATE:+ (template: $PR_TEMPLATE)}${PR_BODY:+ (pr_body=$PR_BODY)}"
 fi
 
 # `run_agent || rc=$?` rather than `if ! run_agent`: inside that if, $? is the negated status, always 0.
@@ -319,21 +323,24 @@ fi
 [ -n "$COST_LINE" ] && log "$COST_LINE"
 
 # The agent may have committed itself (e.g. a merge). Commit anything it left in the tree, then
-# push only if HEAD moved past what the remote already has.
+# push only if HEAD moved past what the remote already has. A job with nothing to push goes on to the PR
+# section: with PR_BODY=replace it still rewrites the open PR's body.
 if [ -n "$(git status --porcelain)" ]; then
   git add -A
   git commit -q -m "eumaeus job $JOB_ID" -m "$TASK"
 fi
 NEW_COMMITS="$(git rev-list --count "$UPSTREAM..HEAD")"
-if [ "$NEW_COMMITS" = 0 ]; then
-  log "no changes"; emit no_changes; exit 0
+if [ "$NEW_COMMITS" != 0 ]; then
+  git push -q -u origin "$BRANCH"
+  log "pushed $BRANCH ($NEW_COMMITS new commit(s))"
+else
+  log "no changes"
 fi
-git push -q -u origin "$BRANCH"
-log "pushed $BRANCH ($NEW_COMMITS new commit(s))"
 
 # Screenshots go under $JOB_ID/ on an orphan branch, never on $BRANCH, so a squash merge carries none. Each commit
 # holds one job's files, with the branch's last commit as parent: the links name the commit, and a fetch of the
 # tip stays small. Another job pushing first rejects the push; fetch its commit and retry, 3 times.
+# Saved only after a push: a job that changed nothing has nothing to show.
 SHOTS_BRANCH=eumaeus-screenshots; SHOTS_SHA=""; SHOTS=()
 save_screenshots() {
   local f name sub root parent commit entries=() p
@@ -360,23 +367,15 @@ save_screenshots() {
   done
   SHOTS=()
 }
-save_screenshots
+[ "$NEW_COMMITS" != 0 ] && save_screenshots
 shots_md() {
   printf '### Screenshots\n'
   for n in "${SHOTS[@]}"; do printf '\n![%s](https://github.com/%s/blob/%s/%s/%s?raw=true)\n' "$n" "$REPO" "$SHOTS_SHA" "$JOB_ID" "$n"; done
 }
 
-PR_URL=""; PR_OPENED=""
-assign=(); [ -n "${PR_ASSIGNEE:-}" ] && assign=(--assignee "$PR_ASSIGNEE")
-if [ "$OPEN_PR" = "1" ] && PR_URL="$(gh pr view "$BRANCH" --repo "$REPO" --json url -q .url 2>/dev/null)" && [ -n "$PR_URL" ]; then
-  log "pr already open: $PR_URL"
-  [ ${#assign[@]} -gt 0 ] && { gh pr edit "$PR_URL" --add-assignee "$PR_ASSIGNEE" >/dev/null 2>/tmp/pr.err || log "assign failed: $(cat /tmp/pr.err)"; }
-  # The body belongs to whoever opened the PR, so this job's screenshots go in a comment.
-  if [ -n "$SHOTS_SHA" ]; then
-    gh pr comment "$PR_URL" --body "$(shots_md)"$'\n\n'"From eumaeus job \`$JOB_ID\`." >/dev/null 2>/tmp/shots.err \
-      || log "screenshots comment failed: $(head -c 300 /tmp/shots.err)"
-  fi
-elif [ "$OPEN_PR" = "1" ]; then
+# Sets title and body: from $PR_FILE when the agent wrote it, else the task and the agent's summary; then this job's
+# screenshots, its run block, and PR_FOOTER. The same text opens a PR or replaces an open one's.
+pr_text() {
   title=""; body=""
   if [ -s "$PR_FILE" ]; then
     title="$(head -n1 "$PR_FILE" | sed 's/^#* *//' | cut -c1-72)"
@@ -399,6 +398,34 @@ elif [ "$OPEN_PR" = "1" ]; then
   [ -n "$SHOTS_SHA" ] && body="$body"$'\n\n'"$(shots_md)"
   body="$body$run"
   [ -n "${PR_FOOTER:-}" ] && body="$body"$'\n\n'"$PR_FOOTER"
+  return 0
+}
+
+# Only a PR that is still open counts: `gh pr view <branch>` also returns a closed or merged one.
+PR_URL=""; PR_OPENED=""; PR_EDITED=""
+assign=(); [ -n "${PR_ASSIGNEE:-}" ] && assign=(--assignee "$PR_ASSIGNEE")
+if [ "$OPEN_PR" = "1" ] && PR_URL="$(gh pr view "$BRANCH" --repo "$REPO" --json url,state -q 'select(.state == "OPEN") | .url' 2>/dev/null)" && [ -n "$PR_URL" ]; then
+  log "pr already open: $PR_URL"
+  if [ "$NEW_COMMITS" != 0 ] && [ ${#assign[@]} -gt 0 ]; then
+    gh pr edit "$PR_URL" --add-assignee "$PR_ASSIGNEE" >/dev/null 2>/tmp/pr.err || log "assign failed: $(cat /tmp/pr.err)"
+  fi
+  if [ "${PR_BODY:-}" = replace ] && [ -s "$PR_FILE" ]; then
+    pr_text
+    if gh pr edit "$PR_URL" --title "$title" --body "$body" >/dev/null 2>/tmp/pr.err; then
+      log "pr title and body replaced"; PR_EDITED=1
+    else
+      log "pr edit failed: $(head -c 300 /tmp/pr.err)"
+    fi
+  elif [ "${PR_BODY:-}" = replace ]; then
+    log "pr_body=replace but no $PR_FILE; body unchanged"
+  fi
+  # Otherwise the body belongs to whoever opened the PR, so this job's screenshots go in a comment.
+  if [ -n "$SHOTS_SHA" ] && [ -z "$PR_EDITED" ]; then
+    gh pr comment "$PR_URL" --body "$(shots_md)"$'\n\n'"From eumaeus job \`$JOB_ID\`." >/dev/null 2>/tmp/shots.err \
+      || log "screenshots comment failed: $(head -c 300 /tmp/shots.err)"
+  fi
+elif [ "$OPEN_PR" = "1" ] && [ "$NEW_COMMITS" != 0 ]; then
+  pr_text
   if PR_URL="$(gh pr create --repo "$REPO" --base "$BASE_BRANCH" --head "$BRANCH" --title "$title" --body "$body" "${assign[@]}" 2>/tmp/pr.err)"; then
     log "pr $PR_URL${PR_ASSIGNEE:+ (assigned to $PR_ASSIGNEE)}"; PR_OPENED=1
   elif [ ${#assign[@]} -gt 0 ] && ! gh pr view "$BRANCH" --repo "$REPO" --json url -q .url >/dev/null 2>&1 \
@@ -409,10 +436,13 @@ elif [ "$OPEN_PR" = "1" ]; then
   fi
 fi
 
-# Files the branch changes relative to the base (three-dot), so a merge from base doesn't list base's files.
-extra=",\"branch\":\"$BRANCH\",\"commit\":\"$(git rev-parse HEAD)\",\"files\":$(git diff --name-only "origin/$BASE_BRANCH...HEAD" | jq -R . | jq -sc .)"
-extra="$extra,\"new_commits\":$NEW_COMMITS"
+extra=""
 [ -n "$PR_URL" ] && extra="$extra,\"pr_url\":\"$PR_URL\""
 [ -n "$PR_OPENED" ] && extra="$extra,\"pr_opened\":true"
+[ "${PR_BODY:-}" = replace ] && extra="$extra,\"pr_edited\":$([ -n "$PR_EDITED" ] && echo true || echo false)"
+if [ "$NEW_COMMITS" = 0 ]; then emit no_changes "$extra"; exit 0; fi
+# Files the branch changes relative to the base (three-dot), so a merge from base doesn't list base's files.
+extra="$extra,\"branch\":\"$BRANCH\",\"commit\":\"$(git rev-parse HEAD)\",\"files\":$(git diff --name-only "origin/$BASE_BRANCH...HEAD" | jq -R . | jq -sc .)"
+extra="$extra,\"new_commits\":$NEW_COMMITS"
 [ -n "$SHOTS_SHA" ] && extra="$extra,\"screenshots\":$(for n in "${SHOTS[@]}"; do printf 'https://github.com/%s/blob/%s/%s/%s?raw=true\n' "$REPO" "$SHOTS_SHA" "$JOB_ID" "$n"; done | jq -R . | jq -sc .)"
 emit pushed "$extra"

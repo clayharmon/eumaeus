@@ -1,6 +1,6 @@
 # M8: a queue nobody watches
 
-Status: planned; nothing built. Evidence is from the 33 hermesmoney jobs of 2026-10-20, ids `20261020-002321-1929`
+Status: step 1 built; steps 2 to 8 planned. Evidence is from the 33 hermesmoney jobs of 2026-10-20, ids `20261020-002321-1929`
 to `20261020-004138-2a54`, read with `job_status`, `job_logs`, and `job_transcript`.
 
 ## The wave loop queues 33 jobs at night and fixes their output by hand in the morning
@@ -339,4 +339,27 @@ numbers.
 
 ## Results
 
-Filled in as each step is built.
+### Step 1: `pr_body: "replace"`
+
+| Check | Result |
+|---|---|
+| A `shell` job on an open PR writes `/work/pr.md` and a commit, with the flag; the title and body change and the body ends with the run block | job `20261020-132636-805a` on PR #18, opened by hand: `pushed`, `pr_edited: true`, 11.5 s. The title became `M8 step 1: replaced by job one`, and the body was the file's text, then the `eumaeus run` block naming `805a` |
+| A second `shell` job writes `pr.md` and no commit, with the flag; it ends `no_changes` with `pr_edited: true` and the body changes again | job `20261020-132706-2ed4`: `no_changes`, `pr_edited: true`, `pr_url` set, 6.3 s. The title became `M8 step 1: replaced by job two, no commit`, and the run block named `2ed4` |
+| The same two jobs without the flag leave the body as it was | jobs `20261020-133217-03f3` (`pushed`, 6.7 s) and `20261020-133217-a5e5` (`no_changes`, 9.0 s) each wrote a `pr.md` saying "Must not appear". After both, the title and body were job `2ed4`'s, unchanged, and neither result has `pr_edited` |
+| The flag with no `pr.md`, from the edge cases | job `20261020-133249-b951`: `no_changes`, `pr_edited: false`, and the log line `pr_body=replace but no /work/pr.md; body unchanged` |
+
+What the build changed from the plan:
+
+- Only an open PR counts as already open. `gh pr view <branch>` also returns a closed or merged one: from the
+  laptop, `gh pr view m7-serial` returned PR #3, `CLOSED`. Before this step a job pushing to such a branch logged
+  `pr already open` and opened nothing; now it opens a new PR. The replace path uses the same filter, so a merged
+  PR's body is never rewritten.
+- Every `no_changes` job's result carries `pr_url` when a PR is open on its branch, flag or not, and `job_status`
+  shows it as `url`. Finding the PR is one `gh pr view` call, and the flag's path needs it anyway.
+- `pr_edited` is in the result only when the flag is set, as `true` or `false`.
+- A `no_changes` job never adds the assignee; only a push does, as before.
+- The hand-off sentence changes with the flag: the harness "opens the pull request from that file, or, when one is
+  already open, replaces its title and body with that file."
+- One function, `pr_text`, builds the title and body for both the open and the replace paths, so a `pr.md` with a
+  title and no body gets the fallback body in both.
+- PR #18 stays open for later steps.
