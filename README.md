@@ -133,6 +133,15 @@ When a check fails and the job has fix attempts left, eumaeus submits a follow-u
 
 The GitHub App needs read access to Checks, Commit statuses, and Actions. `node scripts/github-app-setup.ts` asks for it on a new app. An app created before this change lacks it: on the app's settings page, under Permissions & events, set those three to Read-only and save, then accept the new permissions on the installation, which GitHub links to by email.
 
+## Chains
+
+`submit_job(after: <job id or ids>)` holds a job until the jobs it names have ended, on any repo or branch, up to 20 of them. It starts once each ended with a status in `after_status`, default `["pushed", "no_changes"]`. If one ends with another status, the waiting job ends `cancelled` with the error `after <id> ended <status>`, and so does every job waiting on it, without booting a VM. A job that names a job that doesn't exist is refused and nothing is queued. A job submitted behind one that already ended badly is cancelled at once.
+
+- `cancel_job` on a chain's head cancels the rest.
+- `after_status: ["pushed", "no_changes", "failed"]` runs a job after a failure, for example a job that reports it.
+- A dispatcher restart with a running job marks it `failed`, which cancels the jobs waiting on it. `scripts/update.sh` waits for running jobs first.
+- A waiting job holds no VM and no slot. The jobs behind it in the queue start ahead of it.
+
 ## Starting jobs from GitHub
 
 Set `EUMAEUS_INBOX_USERS` to a comma-separated list of GitHub logins, and the dispatcher turns what those people do on GitHub into jobs, in every repo the GitHub App is installed on. Empty, the default, turns this off. The mention is `@` plus the app's slug, from `github-app.json`; the dispatcher's log names it at start.
@@ -178,7 +187,7 @@ After the push, the job commits them under `<job id>/` on the branch `eumaeus-sc
 
 | Tool | What it does |
 |---|---|
-| `submit_job(repo, task, runner?, model?, base_branch?, branch?, cpus?, memory?, ci_fix?, pr_body?)` | Queues a job. Pass `branch` to name the branch: an existing one, such as a PR head, is continued, and a new name is created from `base_branch`. Pass `ci_fix` to change how many follow-ups a CI failure may start. Pass `pr_body: "replace"` to have a job on an open PR rewrite the PR's title and body from its `/work/pr.md`. |
+| `submit_job(repo, task, runner?, model?, base_branch?, branch?, cpus?, memory?, ci_fix?, pr_body?, after?, after_status?)` | Queues a job. Pass `branch` to name the branch: an existing one, such as a PR head, is continued, and a new name is created from `base_branch`. Pass `ci_fix` to change how many follow-ups a CI failure may start. Pass `pr_body: "replace"` to have a job on an open PR rewrite the PR's title and body from its `/work/pr.md`. Pass `after` to hold the job until other jobs end; see [Chains](#chains). |
 | `job_status(job_id)` | Returns `queued`, `running`, `pushed`, `no_changes`, `failed`, or `cancelled`, plus the PR URL, `result.usage` (cost and turns for `claude`, token counts for `codex` and `antigravity`), `result.pr_edited` for a job with `pr_body`, `ci` once pushed, and `trigger` for a job started from GitHub. |
 | `job_logs(job_id, tail?)` | Tails the log. `claude` and `codex` add one `[agent]` line per tool call as they run. |
 | `job_transcript(job_id, tail?, grep?)` | Returns the agent's own output stream, kept after the VM is gone. Use it to check what the agent actually ran. |

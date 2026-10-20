@@ -1,6 +1,6 @@
 # M8: a queue nobody watches
 
-Status: steps 1 and 2 built; steps 3 to 8 planned. Evidence is from the 33 hermesmoney jobs of 2026-10-20, ids `20261020-002321-1929`
+Status: steps 1 to 3 built; steps 4 to 8 planned. Evidence is from the 33 hermesmoney jobs of 2026-10-20, ids `20261020-002321-1929`
 to `20261020-004138-2a54`, read with `job_status`, `job_logs`, and `job_transcript`.
 
 ## The wave loop queues 33 jobs at night and fixes their output by hand in the morning
@@ -377,3 +377,27 @@ What the build changed from the plan:
 - The job line is the hand-off's first sentence, before the browser and the PR file.
 - `submit_job`'s description and the README's Runners section name the three variables, so a client's brief can
   say "name the job" instead of pasting the id.
+
+### Step 3: `after`
+
+| Check | Result |
+|---|---|
+| `shell` jobs A (`exit 1`), B after A, C after B: B and C end `cancelled`, and their logs have no dispatcher start line | A `20261020-134837-46ac` failed `runner_exit_1` at 13:48:43.130. In the same millisecond B `20261020-134837-8d5e` ended `cancelled` with `after 20261020-134837-46ac ended failed`, and C `20261020-134837-eca2` with `after 20261020-134837-8d5e ended cancelled`. Each log is one line: `cancelled: after <id> ended <status>; no VM started` |
+| A passing chain on two branches with `EUMAEUS_MAX_CONCURRENT=2` starts in order | D `20261020-134852-a729` on `m8-chain-x`, E `a010` on `m8-chain-y` after D, F `f8da` on `m8-chain-x` after E, each `sleep 3`. D ran 13:48:52.401 to 13:49:04.867; E started 13:49:05.467, 0.6 s after D's exit, and ran to 13:49:17.513; F started 13:49:18.182, 0.7 s after E's exit. While D ran, `/healthz` showed `running: 1, queued: 2`: a slot was free and E stayed queued |
+| A job after an unknown id is refused | `after: no job 20250101-000000-dead`, alone and paired with A's id; `list_jobs` shows no row for either |
+| `cancel_job` on a queued head cancels its chain | with the pause file in place, G `20261020-134934-1c16`, H `64fa` after G, I `949f` after H. Cancelling G ended H with `after 20261020-134934-1c16 ended cancelled` and I with `after 20261020-134934-64fa ended cancelled`, both at 13:49:34.826 |
+| B with `after_status: ["failed"]` runs after A fails | `20261020-134846-6af9`, submitted 3 s after A failed, started at once and logged `ran after failure`, `no_changes` |
+| A job submitted behind A with the default `after_status` | `20261020-134847-07c8` came back from `submit_job` already `cancelled`, `after 20261020-134837-46ac ended failed` |
+
+What the build changed from the plan:
+
+- A cancelled waiter's log gets one line, `cancelled: after <id> ended <status>; no VM started`, so `job_logs`
+  doesn't answer `(no log yet)` for a job that ended.
+- Each link names its own dependency: C's error says B ended `cancelled`, not that A failed. The chain's head is
+  one `job_status` away.
+- `recover` checks every queued waiter against its named jobs after marking orphans failed, for a crash between a
+  job's end and the cascade.
+- `cancel_job` on a queued job pumps, for a waiter whose `after_status` includes `cancelled`.
+- `after_status` accepts terminal statuses only, and `after` takes 20 ids at most.
+- `submit_job` returns the row after the check, so a job cancelled at submit reads `cancelled` in the reply.
+- The README gains a "Chains" section.

@@ -3,7 +3,7 @@ import { appendFileSync, existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Config } from './config.ts';
 import type { CredentialSource } from './credentials.ts';
-import { TERMINAL, type Db, type JobRow, type JobStatus } from './db.ts';
+import { DEFAULT_AFTER_STATUS, TERMINAL, type Db, type JobRow, type JobStatus } from './db.ts';
 import { jobVolumes, removeVolume, type Disks } from './disks.ts';
 import { JobProcess, removeVm, type RunOutcome } from './runner.ts';
 
@@ -24,7 +24,13 @@ export interface SubmitInput {
   pr_footer?: string | undefined;
   /** `replace`: the job rewrites the open PR's title and body from the /work/pr.md it writes, with no commit needed. */
   pr_body?: 'replace' | undefined;
+  /** Job ids this job waits for, on any repo or branch. Each must exist, or submit throws. */
+  after?: string | string[] | undefined;
+  /** Statuses of the named jobs that let this one start. Default: pushed or no_changes. */
+  after_status?: JobStatus[] | undefined;
 }
+
+export const AFTER_MAX = 20;
 
 export class Scheduler {
   private readonly active = new Map<string, JobProcess>();
@@ -53,7 +59,11 @@ export class Scheduler {
   activeCount(): number { return this.active.size; }
   paused(): boolean { return existsSync(this.pauseFile); }
 
+  /** Queues the job. Throws when `after` names more than AFTER_MAX jobs or one that doesn't exist; nothing is queued then. */
   submit(input: SubmitInput): JobRow {
+    const after = input.after === undefined ? [] : typeof input.after === 'string' ? [input.after] : input.after;
+    if (after.length > AFTER_MAX) throw new Error(`after: at most ${AFTER_MAX} jobs`);
+    for (const dep of after) if (!this.db.get(dep)) throw new Error(`after: no job ${dep}`);
     const id = newJobId();
     const row = this.db.insert({
       id,
@@ -69,9 +79,39 @@ export class Scheduler {
       ci_fix: input.ci_fix ?? this.cfg.ciFix,
       pr_footer: input.pr_footer ?? null,
       pr_body: input.pr_body ?? null,
+      after: after.length ? JSON.stringify(after) : null,
+      after_status: after.length ? JSON.stringify(input.after_status ?? DEFAULT_AFTER_STATUS) : null,
     });
+    // A job chained behind one that already ended badly ends now, not when a slot frees.
+    this.checkWaiter(row);
     queueMicrotask(() => this.pump());
-    return row;
+    return this.db.get(id) ?? row;
+  }
+
+  /**
+   * Every terminal write goes through here, so a job's end reaches the jobs waiting on it: a waiter whose
+   * after_status doesn't include this status ends cancelled, and its own waiters follow. No VM boots for any of them.
+   */
+  private finish(id: string, status: JobStatus, exitCode: number | null, result: string | null, error: string | null): void {
+    this.db.finish(id, status, exitCode, result, error);
+    for (const w of this.db.waiters(id)) this.checkWaiter(w);
+  }
+
+  /** Cancel a queued waiter when a job it names has ended outside its after_status. Returns true when it did. */
+  private checkWaiter(w: JobRow): boolean {
+    if (w.status !== 'queued' || !w.after) return false;
+    const allowed = new Set<string>(JSON.parse(w.after_status ?? '[]') as string[]);
+    for (const dep of JSON.parse(w.after) as string[]) {
+      const d = this.db.get(dep);
+      if (!d || !TERMINAL.has(d.status) || allowed.has(d.status)) continue;
+      const why = `after ${dep} ended ${d.status}`;
+      this.finish(w.id, 'cancelled', null, null, why);
+      try {
+        appendFileSync(this.logPath(w.id), `[dispatcher] ${new Date().toISOString()} cancelled: ${why}; no VM started\n`);
+      } catch { /* the log is best effort */ }
+      return true;
+    }
+    return false;
   }
 
   /** Start queued jobs until the concurrency limit is reached. */
@@ -89,7 +129,7 @@ export class Scheduler {
     this.active.set(job.id, proc);
     this.timers.set(job.id, setTimeout(() => {
       this.killed.add(job.id);
-      this.db.finish(job.id, 'failed', null, null, `timeout after ${this.cfg.jobTimeoutMs / 60_000} min`);
+      this.finish(job.id, 'failed', null, null, `timeout after ${this.cfg.jobTimeoutMs / 60_000} min`);
       void proc.cancel();
     }, this.cfg.jobTimeoutMs));
 
@@ -113,7 +153,7 @@ export class Scheduler {
     const current = this.db.get(job.id);
     // cancel() and the timeout write their own terminal status first; don't overwrite it.
     if (current && !TERMINAL.has(current.status)) {
-      this.db.finish(job.id, statusFor(out), out.exitCode, out.result ? JSON.stringify(out.result) : null, errorFor(out));
+      this.finish(job.id, statusFor(out), out.exitCode, out.result ? JSON.stringify(out.result) : null, errorFor(out));
       const sha = out.result?.['commit'];
       if (statusFor(out) === 'pushed' && typeof sha === 'string') {
         // src/ci.ts picks it up from the database, so a restart keeps watching.
@@ -154,22 +194,28 @@ export class Scheduler {
     const job = this.db.get(id);
     if (!job) return undefined;
     if (job.status === 'queued') {
-      this.db.finish(id, 'cancelled', null, null, 'cancelled while queued');
+      this.finish(id, 'cancelled', null, null, 'cancelled while queued');
+      // A waiter that accepts `cancelled` may be ready now.
+      queueMicrotask(() => this.pump());
     } else if (job.status === 'running') {
       this.killed.add(id);
-      this.db.finish(id, 'cancelled', null, null, 'cancelled by user');
+      this.finish(id, 'cancelled', null, null, 'cancelled by user');
       await this.active.get(id)?.cancel();
     }
     return this.db.get(id);
   }
 
-  /** Jobs left 'running' by a previous process are dead. Record that and remove their VMs and volumes. */
+  /**
+   * Jobs left 'running' by a previous process are dead. Record that and remove their VMs and volumes. Then check
+   * every waiting job, in case the process died between a job's end and the cascade to its waiters.
+   */
   async recover(): Promise<number> {
     const ids = this.db.idsWithStatus('running');
     for (const id of ids) {
-      this.db.finish(id, 'failed', null, null, 'dispatcher restarted while job was running');
+      this.finish(id, 'failed', null, null, 'dispatcher restarted while job was running');
       await removeVm(id);
     }
+    for (const w of this.db.queuedWithAfter()) this.checkWaiter(w);
     // No job is active yet, so every job volume belongs to a dead job.
     for (const v of await jobVolumes()) await removeVolume(v);
     return ids.length;
@@ -178,7 +224,7 @@ export class Scheduler {
   async shutdown(): Promise<void> {
     for (const [id, proc] of this.active) {
       this.killed.add(id);
-      this.db.finish(id, 'failed', null, null, 'dispatcher shut down');
+      this.finish(id, 'failed', null, null, 'dispatcher shut down');
       await proc.cancel();
     }
   }

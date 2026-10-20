@@ -1,8 +1,8 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { CredentialSource } from './credentials.ts';
-import { JOB_STATUSES, type Db, type JobRow } from './db.ts';
-import type { Scheduler } from './jobs.ts';
+import { JOB_STATUSES, TERMINAL, type Db, type JobRow, type JobStatus } from './db.ts';
+import { AFTER_MAX, type Scheduler } from './jobs.ts';
 import { mergePr } from './prs.ts';
 import { RUNNERS, missingSecret } from './secrets.ts';
 
@@ -21,6 +21,8 @@ function view(j: JobRow, db: Db): Record<string, unknown> {
     trigger: t ? { kind: t.id.slice(0, t.id.indexOf(':')), url: t.url, login: t.login } : null,
     ci: ci_status ? { status: ci_status, ...(ciDetail ? (JSON.parse(ciDetail) as Record<string, unknown>) : {}) } : null,
     task: j.task.length > 300 ? `${j.task.slice(0, 300)}…` : j.task,
+    after: j.after ? (JSON.parse(j.after) as string[]) : null,
+    after_status: j.after_status ? (JSON.parse(j.after_status) as string[]) : null,
     result,
     url: typeof result?.['pr_url'] === 'string' ? result['pr_url'] : j.status === 'pushed' ? `https://github.com/${j.repo}/tree/${j.branch}` : null,
   };
@@ -36,6 +38,9 @@ function instructions(inbox: string | null): string {
       'job_status until the status is pushed, no_changes, failed, or cancelled.',
     '- Jobs on the same repo and branch run one at a time. A later one waits, then starts from the branch\'s new head. ' +
       'It leaves the open PR\'s body alone unless submitted with pr_body: "replace".',
+    '- submit_job after=<job id or ids> holds a job, on any branch, until those jobs end. It starts once each ended ' +
+      'with a status in after_status (default pushed or no_changes); otherwise it ends cancelled with ' +
+      '"after <id> ended <status>", and so do the jobs behind it, without booting a VM.',
     '- After a push, eumaeus watches CI and may submit a follow-up job to fix a failure (job_status ci.followup).',
     inbox
       ? `- Jobs also start from GitHub: ${inbox}. Such a job's job_status has trigger {kind, url, login}, and eumaeus posts the outcome there.`
@@ -83,12 +88,22 @@ export function buildMcpServer(
           'replace: when a PR is already open on the branch, the job rewrites its title and body from the /work/pr.md ' +
           'the agent writes, with the job\'s own screenshots and run block, even when the job pushes nothing (no_changes). ' +
           'Default: a job on an open PR leaves the body alone. A job that pushes with no PR open opens one either way.'),
+        after: z.union([z.string(), z.array(z.string()).max(AFTER_MAX)]).optional().describe(
+          `Job id(s) this job waits for, on any repo or branch, ${AFTER_MAX} at most; each must exist or nothing is queued. ` +
+          'The job starts once every named job has ended with a status in after_status. If one ends with another ' +
+          'status, this job ends cancelled with error "after <id> ended <status>", and so do jobs waiting on it; no VM boots.'),
+        after_status: z.array(z.enum([...TERMINAL] as [JobStatus, ...JobStatus[]])).min(1).optional().describe(
+          'Statuses of the named jobs that let this one start. Default ["pushed", "no_changes"]. Add "failed" to run after a failure.'),
       },
     },
     async (args) => {
       const missing = missingSecret(args.runner, secretsFile);
       if (missing) return text({ error: missing });
-      return text(view(sched.submit(args), db));
+      try {
+        return text(view(sched.submit(args), db));
+      } catch (e) {
+        return text({ error: e instanceof Error ? e.message : String(e) });
+      }
     },
   );
 
@@ -102,7 +117,8 @@ export function buildMcpServer(
         'A pushed result has new_commits, pr_opened (true when this job opened the PR), and screenshots (image URLs, when ' +
         'the agent saved any). A no_changes result has pr_url when a PR is open on the branch. A job submitted with ' +
         'pr_body has pr_edited: whether it replaced the PR body. `trigger` is {kind, url, login} for a job started from GitHub by a label or mention ' +
-        '(kind: label, issue, comment, review-comment, or review), and null otherwise.',
+        '(kind: label, issue, comment, review-comment, or review), and null otherwise. `after` and `after_status` are the ' +
+        'jobs this one waits for and the statuses that let it start; a job cancelled by a chain has error "after <id> ended <status>".',
       inputSchema: { job_id: z.string() },
     },
     async ({ job_id }) => {
