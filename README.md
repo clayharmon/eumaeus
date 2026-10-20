@@ -197,7 +197,7 @@ After the push, the job commits them under `<job id>/` on the branch `eumaeus-sc
 | `pi` | pi | any provider key, e.g. `OPENROUTER_API_KEY` | `provider/id`, or a name like `sonnet` |
 | `shell` | `bash -c "$TASK"` | none | ignored |
 
-`submit_job` refuses up front when the runner's key is missing. Every PR gets a collapsed block with the job id, runner, model, and cost (`claude` only).
+`submit_job` refuses up front when the runner's key is missing. Every PR gets a collapsed block with the job id, runner, model, and cost (`claude` only). Every runner, `shell` included, has `EUMAEUS_JOB_ID`, `EUMAEUS_REPO`, and `EUMAEUS_BRANCH` in its environment, and agent runners are told so, so a task can say "name the job" without repeating the id.
 
 ## Configuration
 

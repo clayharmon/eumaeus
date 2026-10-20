@@ -63,7 +63,8 @@ export function buildMcpServer(
         'the expected outcome. The VM has the repo\'s environment from its devenv.nix, devbox.json, .flox, flake.nix, ' +
         'mise.toml, or .eumaeus.toml (see job_status result.env), and a headless Chromium (playwright-cli); screenshots ' +
         'the agent saves show in the PR. While another job runs on the same repo and branch, this one stays queued, ' +
-        "then starts from the branch's new head. Only the pushed branch, the transcript, and the repo's cached disk " +
+        "then starts from the branch's new head. The agent's environment has EUMAEUS_JOB_ID, EUMAEUS_REPO, and " +
+        "EUMAEUS_BRANCH, and the agent is told so. Only the pushed branch, the transcript, and the repo's cached disk " +
         'outlive the VM.',
       inputSchema: {
         repo: z.string().regex(/^[\w.-]+\/[\w.-]+$/).describe('GitHub repo as owner/name'),

@@ -1,6 +1,6 @@
 # M8: a queue nobody watches
 
-Status: step 1 built; steps 2 to 8 planned. Evidence is from the 33 hermesmoney jobs of 2026-10-20, ids `20261020-002321-1929`
+Status: steps 1 and 2 built; steps 3 to 8 planned. Evidence is from the 33 hermesmoney jobs of 2026-10-20, ids `20261020-002321-1929`
 to `20261020-004138-2a54`, read with `job_status`, `job_logs`, and `job_transcript`.
 
 ## The wave loop queues 33 jobs at night and fixes their output by hand in the morning
@@ -363,3 +363,17 @@ What the build changed from the plan:
 - One function, `pr_text`, builds the title and body for both the open and the replace paths, so a `pr.md` with a
   title and no body gets the fallback body in both.
 - PR #18 stays open for later steps.
+
+### Step 2: the job id in the environment
+
+| Check | Result |
+|---|---|
+| A `claude` job asked to print the three variables prints them, and `EUMAEUS_JOB_ID` equals the job's id | job `20261020-133614-02c5`, Haiku 5.5, 2 turns, $0.002, 11.3 s from VM start to exit. Its one command was `printf '%s=%s\n' EUMAEUS_JOB_ID "$EUMAEUS_JOB_ID" ...`, and its final message was the three lines `EUMAEUS_JOB_ID=20261020-133614-02c5`, `EUMAEUS_REPO=clayharmon/eumaeus-fixtures`, and `EUMAEUS_BRANCH=job/20261020-133614-02c5` |
+| A `shell` job prints `$EUMAEUS_JOB_ID` to the log | job `20261020-133614-eb24`, 4.5 s: the log has `shell sees EUMAEUS_JOB_ID=20261020-133614-eb24 EUMAEUS_REPO=clayharmon/eumaeus-fixtures EUMAEUS_BRANCH=job/20261020-133614-eb24` |
+
+What the build changed from the plan:
+
+- The export sits before the clone, so a repo's setup command sees the three variables too.
+- The job line is the hand-off's first sentence, before the browser and the PR file.
+- `submit_job`'s description and the README's Runners section name the three variables, so a client's brief can
+  say "name the job" instead of pasting the id.

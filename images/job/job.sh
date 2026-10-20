@@ -21,6 +21,8 @@ set -euo pipefail
 : "${JOB_ID:?}" "${REPO:?}" "${TASK:?}" "${GH_TOKEN:?}"
 BASE_BRANCH="${BASE_BRANCH:-main}"
 BRANCH="${BRANCH:-job/$JOB_ID}"
+# What the agent may say about itself: the hand-off names these. Set before setup and every runner, shell included.
+export EUMAEUS_JOB_ID="$JOB_ID" EUMAEUS_REPO="$REPO" EUMAEUS_BRANCH="$BRANCH"
 RUNNER="${RUNNER:-claude}"
 MODEL="${MODEL:-}"
 OPEN_PR="${OPEN_PR:-1}"
@@ -298,7 +300,8 @@ if [ "$RUNNER" != shell ]; then
   # `|| true`: find exits 1 when .github or docs is missing, and set -e would end the job here.
   PR_TEMPLATE="$(find . .github docs -maxdepth 1 -iname 'pull_request_template.md' 2>/dev/null | head -n1 | sed 's#^\./##' || true)"
   mkdir -p /work/screenshots
-  handoff="A headless Chromium is available through \`playwright-cli\`; run \`playwright-cli --help\`. If your change affects what a browser renders, start the app, check the page, and save up to 6 PNG screenshots, 2 MB at most each, to /work/screenshots/. The pull request shows them."
+  handoff="This is eumaeus job \`$JOB_ID\`; \`\$EUMAEUS_JOB_ID\`, \`\$EUMAEUS_REPO\`, and \`\$EUMAEUS_BRANCH\` hold the id, the repo, and the branch."
+  handoff="$handoff A headless Chromium is available through \`playwright-cli\`; run \`playwright-cli --help\`. If your change affects what a browser renders, start the app, check the page, and save up to 6 PNG screenshots, 2 MB at most each, to /work/screenshots/. The pull request shows them."
   handoff="$handoff When the work is done, write the pull request description to $PR_FILE: line 1 is the PR title (72 characters max), then a blank line, then the body in Markdown."
   [ -n "$PR_TEMPLATE" ] && handoff="$handoff The repository's PR template is at $PR_TEMPLATE; fill it in."
   if [ "${PR_BODY:-}" = replace ]; then
