@@ -33,6 +33,8 @@ export interface JobRow {
   ci_status: CiStatus | null;
   /** JSON: the commit, the checks, the follow-up job, and a note. */
   ci: string | null;
+  /** Appended to the body of a PR the job opens, e.g. `Closes #12` for a job from an issue. */
+  pr_footer: string | null;
 }
 
 /** A GitHub event the inbox turned into a job or a reply (src/inbox.ts). One row per event, ever. */
@@ -56,10 +58,11 @@ export interface TriggerRow {
   replied_at: string | null;
 }
 
-export type NewJob = Pick<JobRow, 'id' | 'repo' | 'task' | 'runner' | 'model' | 'base_branch' | 'branch' | 'cpus' | 'memory' | 'parent_id' | 'ci_fix'>;
+export type NewJob = Pick<JobRow, 'id' | 'repo' | 'task' | 'runner' | 'model' | 'base_branch' | 'branch' | 'cpus' | 'memory' | 'parent_id' | 'ci_fix' | 'pr_footer'>;
+export type NewTrigger = Omit<TriggerRow, 'eyes_id' | 'created_at' | 'replied_at'>;
 
 /** Columns added after M4; an older database gets them on open. */
-const ADDED_COLUMNS: Record<string, string> = { parent_id: 'TEXT', ci_fix: 'INTEGER', ci_status: 'TEXT', ci: 'TEXT' };
+const ADDED_COLUMNS: Record<string, string> = { parent_id: 'TEXT', ci_fix: 'INTEGER', ci_status: 'TEXT', ci: 'TEXT', pr_footer: 'TEXT' };
 
 const now = (): string => new Date().toISOString();
 
@@ -117,10 +120,10 @@ export class Db {
   insert(j: NewJob): JobRow {
     this.db
       .prepare(
-        `INSERT INTO jobs (id, repo, task, runner, model, base_branch, branch, cpus, memory, parent_id, ci_fix, status, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?)`,
+        `INSERT INTO jobs (id, repo, task, runner, model, base_branch, branch, cpus, memory, parent_id, ci_fix, pr_footer, status, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?)`,
       )
-      .run(j.id, j.repo, j.task, j.runner, j.model, j.base_branch, j.branch, j.cpus, j.memory, j.parent_id, j.ci_fix, now());
+      .run(j.id, j.repo, j.task, j.runner, j.model, j.base_branch, j.branch, j.cpus, j.memory, j.parent_id, j.ci_fix, j.pr_footer, now());
     return this.get(j.id) as JobRow;
   }
 
@@ -177,6 +180,44 @@ export class Db {
     this.db
       .prepare('INSERT INTO inbox_cursors (repo, since, polled_at) VALUES (?, ?, ?) ON CONFLICT(repo) DO UPDATE SET since = excluded.since, polled_at = excluded.polled_at')
       .run(repo, since, polledAt);
+  }
+
+  /** Run fn in one transaction: all of its writes land, or none do. */
+  transaction<T>(fn: () => T): T {
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      const out = fn();
+      this.db.exec('COMMIT');
+      return out;
+    } catch (e) {
+      this.db.exec('ROLLBACK');
+      throw e;
+    }
+  }
+
+  hasTrigger(id: string): boolean {
+    return this.db.prepare('SELECT 1 FROM triggers WHERE id = ?').get(id) !== undefined;
+  }
+
+  insertTrigger(t: NewTrigger): void {
+    this.db
+      .prepare(
+        `INSERT INTO triggers (id, repo, number, url, login, job_id, react_path, reply_path, reply, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(t.id, t.repo, t.number, t.url, t.login, t.job_id, t.react_path, t.reply_path, t.reply, now());
+  }
+
+  setTriggerEyes(id: string, eyesId: number | null): void {
+    this.db.prepare('UPDATE triggers SET eyes_id = ? WHERE id = ?').run(eyesId, id);
+  }
+
+  setReplied(id: string, reply: string): void {
+    this.db.prepare('UPDATE triggers SET reply = ?, replied_at = ? WHERE id = ?').run(reply, now(), id);
+  }
+
+  triggerForJob(jobId: string): TriggerRow | undefined {
+    return this.db.prepare('SELECT * FROM triggers WHERE job_id = ?').get(jobId) as TriggerRow | undefined;
   }
 
   /** Triggers whose reply hasn't been posted. */

@@ -11,11 +11,14 @@ const text = (v: unknown): { content: { type: 'text'; text: string }[] } => ({
 });
 
 /** Trim the row for tool output: the task can be long and the result is JSON-in-a-string. */
-function view(j: JobRow): Record<string, unknown> {
+function view(j: JobRow, db: Db): Record<string, unknown> {
   const result = j.result ? (JSON.parse(j.result) as Record<string, unknown>) : null;
   const { ci_status, ci: ciDetail, ...row } = j;
+  const t = db.triggerForJob(j.id);
   return {
     ...row,
+    // The GitHub event that started the job (src/inbox.ts).
+    trigger: t ? { kind: t.id.slice(0, t.id.indexOf(':')), url: t.url, login: t.login } : null,
     ci: ci_status ? { status: ci_status, ...(ciDetail ? (JSON.parse(ciDetail) as Record<string, unknown>) : {}) } : null,
     task: j.task.length > 300 ? `${j.task.slice(0, 300)}…` : j.task,
     result,
@@ -55,7 +58,7 @@ export function buildMcpServer(sched: Scheduler, db: Db, creds: CredentialSource
     async (args) => {
       const missing = missingSecret(args.runner, secretsFile);
       if (missing) return text({ error: missing });
-      return text(view(sched.submit(args)));
+      return text(view(sched.submit(args), db));
     },
   );
 
@@ -70,7 +73,7 @@ export function buildMcpServer(sched: Scheduler, db: Db, creds: CredentialSource
     },
     async ({ job_id }) => {
       const j = db.get(job_id);
-      return text(j ? view(j) : { error: 'not found', job_id });
+      return text(j ? view(j, db) : { error: 'not found', job_id });
     },
   );
 
@@ -107,7 +110,7 @@ export function buildMcpServer(sched: Scheduler, db: Db, creds: CredentialSource
     { title: 'Cancel a job', description: 'Cancel a queued or running job. Running jobs have their VM stopped and removed.', inputSchema: { job_id: z.string() } },
     async ({ job_id }) => {
       const j = await sched.cancel(job_id);
-      return text(j ? view(j) : { error: 'not found', job_id });
+      return text(j ? view(j, db) : { error: 'not found', job_id });
     },
   );
 
@@ -153,7 +156,7 @@ export function buildMcpServer(sched: Scheduler, db: Db, creds: CredentialSource
       description: 'Recent jobs, newest first. Filter by status.',
       inputSchema: { status: z.enum(JOB_STATUSES).optional(), limit: z.number().int().min(1).max(100).default(20) },
     },
-    async ({ status, limit }) => text(db.list(status ?? null, limit).map(view)),
+    async ({ status, limit }) => text(db.list(status ?? null, limit).map((j) => view(j, db))),
   );
 
   return server;

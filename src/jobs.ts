@@ -18,8 +18,10 @@ export interface SubmitInput {
   memory?: string | undefined;
   /** Follow-up jobs allowed if this job's CI fails. Default: EUMAEUS_CI_FIX. */
   ci_fix?: number | undefined;
-  /** Set by the CI watcher on the follow-up jobs it submits. */
+  /** Set by the CI watcher on the follow-up jobs it submits, and by the inbox on a PR an eumaeus job pushed. */
   parent_id?: string | undefined;
+  /** Set by the inbox: `Closes #<n>` for a job from an issue. */
+  pr_footer?: string | undefined;
 }
 
 export class Scheduler {
@@ -63,6 +65,7 @@ export class Scheduler {
       memory: input.memory ?? this.cfg.memory,
       parent_id: input.parent_id ?? null,
       ci_fix: input.ci_fix ?? this.cfg.ciFix,
+      pr_footer: input.pr_footer ?? null,
     });
     queueMicrotask(() => this.pump());
     return row;

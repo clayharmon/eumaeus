@@ -3,7 +3,8 @@
 # Required env: JOB_ID, REPO (owner/name), TASK, GH_TOKEN.
 # Optional env: BASE_BRANCH (main), BRANCH (job/$JOB_ID), RUNNER (claude|codex|antigravity|pi|shell), MODEL,
 #   GIT_AUTHOR_NAME/GIT_AUTHOR_EMAIL (commit identity), OPEN_PR (1 = open a pull request after push),
-#   PR_ASSIGNEE (GitHub login to assign the PR to).
+#   PR_ASSIGNEE (GitHub login to assign the PR to), PR_FOOTER (appended to the body of a PR this job opens, e.g.
+#   "Closes #12").
 # Agent runners are asked to write the PR title and body to /work/pr.md (filling the repo's PR template if
 # there is one). The PR is opened from that file; without it the body is the task plus the agent's summary.
 # Runner credentials: claude ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN; codex OPENAI_API_KEY or CODEX_API_KEY;
@@ -324,7 +325,7 @@ fi
 git push -q -u origin "$BRANCH"
 log "pushed $BRANCH ($NEW_COMMITS new commit(s))"
 
-PR_URL=""
+PR_URL=""; PR_OPENED=""
 assign=(); [ -n "${PR_ASSIGNEE:-}" ] && assign=(--assignee "$PR_ASSIGNEE")
 if [ "$OPEN_PR" = "1" ] && PR_URL="$(gh pr view "$BRANCH" --repo "$REPO" --json url -q .url 2>/dev/null)" && [ -n "$PR_URL" ]; then
   log "pr already open: $PR_URL"
@@ -350,11 +351,12 @@ elif [ "$OPEN_PR" = "1" ]; then
     run="$(printf '\n\n## Run\n\n- job: `%s`\n- runner: %s\n- requested model: %s\n- %s\n' "$JOB_ID" "$RUNNER" "${MODEL:-default}" "${COST_LINE:-no cost data}")"
   fi
   body="$body$run"
+  [ -n "${PR_FOOTER:-}" ] && body="$body"$'\n\n'"$PR_FOOTER"
   if PR_URL="$(gh pr create --repo "$REPO" --base "$BASE_BRANCH" --head "$BRANCH" --title "$title" --body "$body" "${assign[@]}" 2>/tmp/pr.err)"; then
-    log "pr $PR_URL${PR_ASSIGNEE:+ (assigned to $PR_ASSIGNEE)}"
+    log "pr $PR_URL${PR_ASSIGNEE:+ (assigned to $PR_ASSIGNEE)}"; PR_OPENED=1
   elif [ ${#assign[@]} -gt 0 ] && ! gh pr view "$BRANCH" --repo "$REPO" --json url -q .url >/dev/null 2>&1 \
        && PR_URL="$(gh pr create --repo "$REPO" --base "$BASE_BRANCH" --head "$BRANCH" --title "$title" --body "$body" 2>/tmp/pr2.err)"; then
-    log "pr $PR_URL (assign to $PR_ASSIGNEE failed: $(head -c 300 /tmp/pr.err))"
+    log "pr $PR_URL (assign to $PR_ASSIGNEE failed: $(head -c 300 /tmp/pr.err))"; PR_OPENED=1
   else
     log "pr create failed: $(cat /tmp/pr.err /tmp/pr2.err 2>/dev/null | head -c 600)"; PR_URL=""
   fi
@@ -362,5 +364,7 @@ fi
 
 # Files the branch changes relative to the base (three-dot), so a merge from base doesn't list base's files.
 extra=",\"branch\":\"$BRANCH\",\"commit\":\"$(git rev-parse HEAD)\",\"files\":$(git diff --name-only "origin/$BASE_BRANCH...HEAD" | jq -R . | jq -sc .)"
+extra="$extra,\"new_commits\":$NEW_COMMITS"
 [ -n "$PR_URL" ] && extra="$extra,\"pr_url\":\"$PR_URL\""
+[ -n "$PR_OPENED" ] && extra="$extra,\"pr_opened\":true"
 emit pushed "$extra"

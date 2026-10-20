@@ -1,6 +1,6 @@
 import type { Config } from './config.ts';
-import type { Db } from './db.ts';
-import { ghGet, RateLimited, type Conditional, type GitHubApp, type RateLimit } from './github.ts';
+import { TERMINAL, type Db, type JobRow, type NewTrigger, type TriggerRow } from './db.ts';
+import { ghApi, ghGet, RateLimited, type Conditional, type GitHubApp, type RateLimit } from './github.ts';
 import type { Scheduler } from './jobs.ts';
 
 /** The label that turns an issue into a job. The inbox never creates it; each repo creates it once. */
@@ -12,12 +12,17 @@ const TOKEN_MS = 50 * 60_000;
 const LAG_MS = 60_000;
 const PARALLEL = 8;
 const MAX_PAGES = 10;
+/** The longest task the inbox submits, as for submit_job. */
+const TASK_CHARS = 20_000;
 
 interface Issue {
   id: number; number: number; title: string; body: string | null; user: { login: string }; html_url: string;
   state: string; created_at: string; updated_at: string; pull_request?: object;
 }
 interface IssueEvent { id: number; event: string; actor: { login: string } | null; created_at: string; label?: { name: string }; issue?: Issue }
+interface Comment { id: number; user: { login: string } | null; body: string | null; created_at: string; html_url: string }
+/** A trigger before it has a job: who caused it, and where its 👀 and its answer go. */
+type Found = Omit<NewTrigger, 'job_id' | 'reply'>;
 
 interface Watched { repo: string; installation: number; account: string }
 
@@ -90,6 +95,7 @@ export class Inbox {
         for (let w = queue.shift(); w && Date.now() >= this.pausedUntil; w = queue.shift()) await this.poll(w, responses);
       }));
       this.lastPoll = { at: new Date().toISOString(), seconds: (Date.now() - t0) / 1000, responses };
+      await this.answer();
     } catch (e) {
       this.fail('inbox', e);
     } finally {
@@ -160,7 +166,7 @@ export class Inbox {
       if (issues || (this.dirty.get(w.repo) ?? 0) > started) {
         const events = await list<IssueEvent>(`/repos/${w.repo}/issues/events?per_page=100`, (e) => after(e.created_at));
         for (const e of events ?? []) {
-          if (e.event === 'labeled' && e.label?.name === LABEL && after(e.created_at) && e.issue) this.labeled(w, e, e.issue);
+          if (e.event === 'labeled' && e.label?.name === LABEL && after(e.created_at) && e.issue) await this.labeled(w, e, e.issue, token);
         }
       }
 
@@ -173,10 +179,108 @@ export class Inbox {
     }
   }
 
-  private labeled(w: Watched, e: IssueEvent, issue: Issue): void {
+  /**
+   * The label on an issue starts a job and comes off, so adding it again is a retry. On a PR it only comes off,
+   * with a reply. A throw before the trigger is recorded fails the poll, which then sees the event again.
+   */
+  private async labeled(w: Watched, e: IssueEvent, issue: Issue, token: string): Promise<void> {
+    const id = `label:${e.id}`;
+    if (this.db.hasTrigger(id)) return;
     const login = e.actor?.login ?? '?';
-    const allowed = this.cfg.inboxUsers.includes(login.toLowerCase());
-    this.once(`label:${e.id}`, `inbox: label:${e.id} ${w.repo}#${issue.number} labeled by ${login}${allowed ? '' : ', not in EUMAEUS_INBOX_USERS: ignored'}`);
+    const where = `${id} ${w.repo}#${issue.number} labeled by ${login}`;
+    if (!this.allowed(login)) { this.once(id, `inbox: ${where}, not in EUMAEUS_INBOX_USERS: ignored`); return; }
+    if (issue.state !== 'open') { this.once(id, `inbox: ${where}, closed: skipped`); return; }
+    const found: Found = {
+      id, repo: w.repo, number: issue.number, url: issue.html_url, login,
+      react_path: `/repos/${w.repo}/issues/${issue.number}/reactions`, reply_path: `/repos/${w.repo}/issues/${issue.number}/comments`,
+    };
+    if (issue.pull_request) {
+      this.db.insertTrigger({ ...found, job_id: null, reply: `The ${LABEL} label starts a job from an issue. On a pull request, mention @${this.app!.cfg.slug} with what to change.` });
+      this.log(`inbox: ${where}, a pull request: replying`);
+    } else {
+      const job = await this.issueJob(w, issue, found, token);
+      this.log(`inbox: ${where}: job ${job.id}`);
+      await this.eyes(found, token);
+    }
+    await ghApi(`/repos/${w.repo}/issues/${issue.number}/labels/${LABEL}`, token, { method: 'DELETE' })
+      .catch((err: unknown) => this.fail(`${id} label`, err));
+  }
+
+  /** A job on a new branch from the default branch whose task is the issue, and whose PR closes it. */
+  private async issueJob(w: Watched, issue: Issue, found: Found, token: string): Promise<JobRow> {
+    const { default_branch } = await ghApi<{ default_branch: string }>(`/repos/${w.repo}`, token);
+    const comments: Comment[] = [];
+    for (let url: string | null = `/repos/${w.repo}/issues/${issue.number}/comments?per_page=100`; url;) {
+      const page: Conditional<Comment[]> = await ghGet(url, token);
+      comments.push(...(page.body ?? []));
+      url = page.next;
+    }
+    // The person who added the label vouches for the issue's body; other people's comments stay out.
+    const allowed = comments.filter((c) => c.user && this.allowed(c.user.login) && c.body?.trim());
+    const task = [
+      `Resolve issue ${issue.html_url}: ${issue.title}`,
+      '',
+      issue.body?.trim() || '(no description)',
+      ...(allowed.length ? ['', 'Comments from allowed users:', ...allowed.map((c) => `- @${c.user!.login}: ${c.body!.trim().replaceAll('\n', '\n  ')}`)] : []),
+    ].join('\n');
+    // One transaction: a crash leaves both rows or neither, so a restart neither loses the trigger nor runs it twice.
+    return this.db.transaction(() => {
+      const job = this.sched.submit({
+        repo: w.repo, task: task.length > TASK_CHARS ? `${task.slice(0, TASK_CHARS)}\n[cut]` : task, runner: 'claude',
+        base_branch: default_branch, pr_footer: `Closes #${issue.number}`,
+      });
+      this.db.insertTrigger({ ...found, job_id: job.id, reply: null });
+      return job;
+    });
+  }
+
+  private async eyes(t: Pick<TriggerRow, 'id' | 'react_path'>, token: string): Promise<void> {
+    try {
+      const r = await ghApi<{ id: number }>(t.react_path, token, { method: 'POST', body: JSON.stringify({ content: 'eyes' }) });
+      this.db.setTriggerEyes(t.id, r.id);
+    } catch (e) {
+      this.fail(`${t.id} eyes`, e);
+    }
+  }
+
+  /**
+   * When a trigger's job ends: 👀 off, 🚀 or 😕 on, then one line. replied_at is set right after the line, so a
+   * restart neither loses an answer nor posts it twice.
+   */
+  private async answer(): Promise<void> {
+    for (const t of this.db.unanswered()) {
+      const w = this.repos.find((r) => r.repo === t.repo);
+      if (!w) continue;
+      try {
+        const token = await this.token(w.installation);
+        const job = t.job_id ? this.db.get(t.job_id) : undefined;
+        if (job && !TERMINAL.has(job.status)) {
+          // The dispatcher stopped between submitting the job and reacting.
+          if (t.eyes_id === null) await this.eyes(t, token);
+          continue;
+        }
+        let line = t.reply ?? '';
+        if (job) {
+          if (t.eyes_id !== null) {
+            await ghApi(`${t.react_path}/${t.eyes_id}`, token, { method: 'DELETE' }).catch((e: unknown) => {
+              if (!(e instanceof Error && / -> 404: /.test(e.message))) throw e;
+            });
+          }
+          const ok = job.status === 'pushed' || job.status === 'no_changes';
+          await ghApi(t.react_path, token, { method: 'POST', body: JSON.stringify({ content: ok ? 'rocket' : 'confused' }) });
+          line = outcomeLine(job);
+        }
+        await ghApi(t.reply_path, token, { method: 'POST', body: JSON.stringify({ body: line }) });
+        this.db.setReplied(t.id, line);
+        this.log(`inbox: ${t.id} answered: ${line}`);
+      } catch (e) {
+        this.fail(`${t.id} answer`, e);
+      }
+    }
+  }
+
+  private allowed(login: string): boolean {
+    return this.cfg.inboxUsers.includes(login.toLowerCase());
   }
 
   private fail(where: string, e: unknown): void {
@@ -194,4 +298,20 @@ export class Inbox {
     this.logged.add(key);
     this.log(line);
   }
+}
+
+/** The line posted when a trigger's job ends. */
+export function outcomeLine(j: JobRow): string {
+  const r = j.result ? (JSON.parse(j.result) as Record<string, unknown>) : {};
+  if (j.status === 'pushed') {
+    const pr = typeof r['pr_url'] === 'string' ? /\/pull\/(\d+)/.exec(r['pr_url'])?.[1] : undefined;
+    if (pr && r['pr_opened'] === true) return `Opened #${pr}.`;
+    const n = typeof r['new_commits'] === 'number' ? r['new_commits'] : null;
+    const sha = typeof r['commit'] === 'string' ? r['commit'].slice(0, 7) : '?';
+    const pushed = n === null ? 'Pushed' : `Pushed ${n} commit${n === 1 ? '' : 's'}`;
+    return pr ? `${pushed}, up to ${sha}.` : `${pushed} to ${j.branch}, up to ${sha}.`;
+  }
+  if (j.status === 'no_changes') return `No changes. Job ${j.id}.`;
+  if (j.status === 'cancelled') return `Cancelled. Job ${j.id}.`;
+  return `Failed: ${j.error ?? 'unknown error'}. Job ${j.id}.`;
 }

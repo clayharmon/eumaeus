@@ -35,6 +35,8 @@ export async function ghApi<T>(path: string, token: string | null, init: Request
   if (token) headers['authorization'] = `Bearer ${token}`;
   const r = await fetch(`https://api.github.com${path}`, { ...init, headers });
   if (!r.ok) throw new Error(`GitHub ${init.method ?? 'GET'} ${path} -> ${r.status}: ${(await r.text()).slice(0, 300)}`);
+  // 204: a DELETE, or a POST with nothing to return.
+  if (r.status === 204) return undefined as T;
   return (await r.json()) as T;
 }
 

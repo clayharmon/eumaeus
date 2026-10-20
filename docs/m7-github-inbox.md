@@ -1,6 +1,6 @@
 # M7: work from the pull request
 
-Status: plan approved 2026-10-19; next is step 4. Browser measurements are from a spike on an Apple silicon Mac on
+Status: plan approved 2026-10-19; next is step 5. Browser measurements are from a spike on an Apple silicon Mac on
 `container` 1.5.0 with `@playwright/cli` 0.1.22.
 
 ## You review on GitHub, and eumaeus can't hear you there
@@ -395,3 +395,31 @@ What the build changed from the plan:
 - Archived repos aren't polled.
 - `/healthz` `inbox` has `users`, `poll_s`, `repos`, `last_poll` (time, seconds, and a count per HTTP status),
   `waiting`, `rate` per installation account, and `paused_until`. With the inbox off it is `{off: <reason>}`.
+
+### Step 4: issue label, and the answer
+
+| Check | Result |
+|---|---|
+| Labeling an issue starts one job | #8, labeled at 00:18:48, was seen at 00:18:57 and started job `20261020-001857-4697` on `main`. It ran 14 s, Sonnet 5.5, 2 turns, $0.029 |
+| Its PR body ends with `Closes #<n>`, and the label is gone | PR #9's body ends with `Closes #8`, and GitHub lists #8 under its closing issues. #8 had no labels 9 s after the label went on |
+| 👀 while the job runs, then 🚀 in its place, then `Opened #<pr>.` | 👀 at 00:18:57; at 00:19:17 #8 held only 🚀, and at 00:19:18 the bot posted `Opened #9.` |
+| A job made to fail ends with 😕 and a `Failed:` line | #10's job `20261020-002015-e356` was stopped by the restart below. #10 held only 😕, then `Failed: dispatcher shut down. Job 20261020-002015-e356.` |
+| Restarting the dispatcher during the job submits no second job and posts no second line | SIGTERM at 00:20:20, 4.4 s into #10's job, 17 s after its label. The new process re-read the event inside the 60 s cursor lag. One job was created after 00:20:00, and #10 has one comment |
+| With your login removed from `EUMAEUS_INBOX_USERS`, the label starts nothing | with `EUMAEUS_INBOX_USERS=nobody-m7-check`, #7 was logged `labeled by clayharmon, not in EUMAEUS_INBOX_USERS: ignored`: no trigger, no job, no reaction, the label left on |
+| `job_status` shows `trigger` | `{"kind": "label", "url": "https://github.com/clayharmon/eumaeus-fixtures/issues/8", "login": "clayharmon"}` |
+
+What the build changed from the plan:
+
+- A running job fails when the dispatcher stops: `dispatcher shut down` on SIGTERM, or `dispatcher restarted while
+  job was running` after a crash. So the restart run is also the failure run.
+- `job.sh` adds `new_commits` and `pr_opened` to the result. The line is `Opened #<pr>.` only when the job opened the
+  PR. A job that pushed to a branch with a PR already open gets `Pushed 2 commits, up to 1a2b3c4.`
+- Two lines the plan's table didn't list: `Cancelled. Job <id>.`, and `Pushed 2 commits to <branch>, up to 1a2b3c4.`
+  when the branch has no PR.
+- The label on a PR gets no reactions, only the reply. On PR #9 the label was off and the reply posted 1.5 s after
+  the poll saw it.
+- A label from someone not allowed stays on. Its log line is written once per process.
+- When the dispatcher stopped between submitting a job and adding 👀, the next answer pass adds it while the job
+  runs. The Check didn't exercise this.
+- The task is cut at 20,000 characters, the `submit_job` limit, and ends with `[cut]`.
+- PR #9 stays open: step 5's Check reviews it.
