@@ -1,6 +1,6 @@
 # M7: work from the pull request
 
-Status: plan approved 2026-10-19; next is step 5. Browser measurements are from a spike on an Apple silicon Mac on
+Status: plan approved 2026-10-19; next is step 6. Browser measurements are from a spike on an Apple silicon Mac on
 `container` 1.5.0 with `@playwright/cli` 0.1.22.
 
 ## You review on GitHub, and eumaeus can't hear you there
@@ -423,3 +423,42 @@ What the build changed from the plan:
   runs. The Check didn't exercise this.
 - The task is cut at 20,000 characters, the `submit_job` limit, and ends with `[cut]`.
 - PR #9 stays open: step 5's Check reviews it.
+
+### Step 5: mentions
+
+| Check | Result |
+|---|---|
+| A review on the step 4 PR with 2 inline comments and `@you-eumaeus` in its body starts one job whose commit addresses both | review 5579375668 on PR #9, posted at 00:28:14, was seen at 00:28:22 and started job `20261020-002821-1b06` (12 s, parent `20261020-001857-4697`). Its one commit turned the line into `Labeled from an issue.` The second inline comment also mentioned the app and started no job of its own |
+| An inline comment `@you-eumaeus rename foo to bar` gets a commit and a reply in its thread | comment 4320254160 on PR #11 started job `20261020-002825-46d8`, which changed `const foo = 1;` to `const bar = 1;`. Reply 4320258334, in that thread: `Pushed 1 commit, up to d234929.` |
+| A mention on a PR opened by hand pushes to its branch | on PR #11, opened by hand from `m7-hand`, comment 6280409946 started job `20261020-002824-3362`. It pushed `const baz = 2;` to `m7-hand` and answered `Pushed 1 commit, up to 327cf3c.` |
+| A mention in an issue comment opens a PR | comment 6280410370 on #12 started job `20261020-002823-0304`, which opened PR #13 with a body ending in `Closes #12`. #12 got `Opened #13.` |
+| A mention on a PR from a fork starts nothing | PR #14, from `oreibates/eumaeus-fixtures:m7-fork`: no job, no reaction, one reply: `This pull request's branch is in a fork, and the app can push only to clayharmon/eumaeus-fixtures. Nothing ran.` |
+| A quoted mention starts nothing | comment 6280414243 on #11, `> @you-eumaeus rename foo to bar`: no trigger row, no log line |
+| A review with no mention starts nothing | review 5579377950 on PR #9, with an inline comment and neither mentioning the app: no trigger row |
+
+The 2 jobs on `m7-hand` ran one after the other. `46d8` was queued at 00:28:25, a slot was free from 00:28:36, and it
+started at 00:28:45.458, 1 ms after `3362` finished.
+
+What the build changed from the plan:
+
+- GitHub has no repo-wide list of reviews. A review changes its PR's `updated_at` in the open-issue list, so the
+  inbox reads the reviews of each PR updated after the cursor, and keeps reading them for 60 s after.
+- A review's own comment list, `/pulls/{n}/reviews/{id}/comments`, leaves out line numbers. The first review job's
+  task read `m7-step4.txt:?`. The inbox now reads the PR's comment list and keeps that review's comments. Review
+  5579403130's job, `20261020-003259-c5de`, read `m7-step4.txt:1`, and its commit addressed both comments.
+- Lines and the commit come from `original_line` and `original_commit_id`, the commit the comment was written on.
+  `line` turned null on PR #9 once the review's job pushed.
+- An inline comment that mentions the app, in a review whose body mentions it too, belongs to that review's job.
+  The inbox reads the comment's review to tell, so the order the two are seen in doesn't matter.
+- `parent_id` is the newest job that pushed to the PR's branch, even when a person pushed after it. The second
+  review on PR #9 followed `20261020-002821-1b06`.
+- A mention alone on a PR gets `` Write what to change after `@you-eumaeus`. A mention alone starts nothing. ``
+  Checked with comment 6280519274 on #11.
+- The bot's comments are never triggers, and its replies put the mention in backticks. The step 4 reply on PR #9
+  had rendered `@you-eumaeus` as a live mention.
+- A mention doesn't count right after a letter, digit, `@`, `.`, `/`, or `-`, so `me@you-eumaeus.com` starts nothing.
+- A poll that reads past the issue list now reads 3 lists per repo, plus the reviews of each PR that changed. The
+  first poll after a start made 202 requests for 50 repos. A quiet poll is still 50 requests, all `304`: the one at
+  00:38:34 took 1.8 s.
+- A reply in a thread goes to the thread's first comment, since GitHub refuses replies to replies.
+- The fork `oreibates/eumaeus-fixtures` stays for later runs.

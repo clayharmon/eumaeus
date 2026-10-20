@@ -26,7 +26,7 @@ export interface JobRow {
   exit_code: number | null;
   result: string | null;
   error: string | null;
-  /** The job whose failing CI this job was submitted to fix. */
+  /** The job whose failing CI this job was submitted to fix, or whose branch a mention on its PR asked to change. */
   parent_id: string | null;
   /** Follow-up jobs this job may start when its CI fails. */
   ci_fix: number | null;
@@ -218,6 +218,13 @@ export class Db {
 
   triggerForJob(jobId: string): TriggerRow | undefined {
     return this.db.prepare('SELECT * FROM triggers WHERE job_id = ?').get(jobId) as TriggerRow | undefined;
+  }
+
+  /** The newest job that pushed to a branch. A mention on the branch's PR follows up on it. */
+  lastPushed(repo: string, branch: string): JobRow | undefined {
+    return this.db
+      .prepare(`SELECT * FROM jobs WHERE repo = ? COLLATE NOCASE AND branch = ? AND status = 'pushed' ORDER BY finished_at DESC LIMIT 1`)
+      .get(repo, branch) as JobRow | undefined;
   }
 
   /** Triggers whose reply hasn't been posted. */
