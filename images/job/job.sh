@@ -38,12 +38,32 @@ OUT=/work; { [ -d /out ] && [ -w /out ]; } && OUT=/out
 trap sync EXIT
 
 log() { printf '[job %s] %s\n' "$JOB_ID" "$*" >&2; }
+
+# Peak memory, the job's first act: every 2 s, MemTotal minus MemAvailable from /proc/meminfo, the largest kept in
+# /work/peak_mem in kB. emit stops the sampler and reports it. A spike shorter than 2 s is missed; when the kernel
+# kills the agent's command for memory, the last sample before the kill is the peak.
+MEM_TOTAL_KB="$(awk '/^MemTotal:/ {print $2}' /proc/meminfo)"
+PEAK_FILE=/work/peak_mem
+mem_sampler() {
+  local peak=0 used
+  while :; do
+    used="$(awk '/^MemTotal:/ {t=$2} /^MemAvailable:/ {a=$2} END {print t-a}' /proc/meminfo)"
+    if [ "$used" -gt "$peak" ]; then peak=$used; printf '%s\n' "$peak" > "$PEAK_FILE"; fi
+    sleep 2
+  done
+}
+mem_sampler & SAMPLER_PID=$!
+
 # setup_ok tells the dispatcher this job's disk may become the repo's golden disk.
 emit() {
-  local extra="${2:-}"
+  local extra="${2:-}" peak_kb
   [ -n "$USAGE" ] && extra="$extra,\"usage\":$USAGE"
   [ -n "$ENV_JSON" ] && extra="$extra,\"env\":$ENV_JSON"
   [ -n "$SETUP_OK" ] && extra="$extra,\"setup_ok\":true"
+  if [ -n "${SAMPLER_PID:-}" ]; then kill "$SAMPLER_PID" 2>/dev/null || true; wait "$SAMPLER_PID" 2>/dev/null || true; SAMPLER_PID=""; fi
+  peak_kb="$(cat "$PEAK_FILE" 2>/dev/null || echo 0)"
+  extra="$extra,\"peak_mem_mb\":$((peak_kb / 1024)),\"mem_total_mb\":$((MEM_TOTAL_KB / 1024))"
+  log "memory: peak $((peak_kb / 1024)) MB of $((MEM_TOTAL_KB / 1024)) MB"
   printf '{"job_id":"%s","status":"%s"%s}\n' "$JOB_ID" "$1" "$extra"
 }
 

@@ -113,7 +113,8 @@ export function buildMcpServer(
     {
       title: 'Job status',
       description:
-        'Current state of one job: its result JSON, its branch or PR URL once pushed, and `ci` once pushed: pending, success, ' +
+        'Current state of one job: its result JSON (every result has peak_mem_mb, the most memory the VM used, sampled ' +
+        'every 2 s, and mem_total_mb, what the VM had), its branch or PR URL once pushed, and `ci` once pushed: pending, success, ' +
         'failure, none (no checks), timeout, or unavailable, with each check and, after a failure, the follow-up job id. ' +
         'A pushed result has new_commits, pr_opened (true when this job opened the PR), and screenshots (image URLs, when ' +
         'the agent saved any). A no_changes result has pr_url when a PR is open on the branch. A job submitted with ' +

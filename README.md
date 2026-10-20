@@ -17,7 +17,7 @@ Limits:
 - Jobs time out after 60 minutes. Restarting the dispatcher marks in-flight jobs `failed`; `scripts/update.sh` waits for them first.
 - [Starting jobs from GitHub](#starting-jobs-from-github) turns issue and PR text into agent instructions. `EUMAEUS_INBOX_USERS` is the only gate: an issue a stranger wrote becomes a task once a listed user labels it. The VM's token can push to any branch of its repo for an hour, the default branch included unless branch protection stops it. Protect the default branch on repos the inbox watches.
 - The inbox needs the GitHub App with Issues read and write, and it mints tokens for every repo of an installation. They stay on the host.
-- Every VM carries a headless Chromium. One open page took 937 MB of the VM's 4 GB, before the app's dev server and the agent; a repo with a heavy dev server may need `EUMAEUS_MEMORY=6G`.
+- Every VM carries a headless Chromium. One open page took 937 MB of the VM's 4 GB, before the app's dev server and the agent; a repo with a heavy dev server may need `EUMAEUS_MEMORY=6G`. `job_status` shows `result.peak_mem_mb`, the most memory the VM used, sampled every 2 s, so `memory` can be set from a measurement.
 - The commit status `eumaeus/ci` repeats what the agent wrote to `/work/ci.json`. It is not an independent run, and a branch rule that requires it is satisfied by the agent's own claim.
 
 ## What a job does
@@ -191,7 +191,7 @@ After the push, the job commits them under `<job id>/` on the branch `eumaeus-sc
 | Tool | What it does |
 |---|---|
 | `submit_job(repo, task, runner?, model?, base_branch?, branch?, cpus?, memory?, ci_fix?, pr_body?, after?, after_status?)` | Queues a job. Pass `branch` to name the branch: an existing one, such as a PR head, is continued, and a new name is created from `base_branch`. Pass `ci_fix` to change how many follow-ups a CI failure may start. Pass `pr_body: "replace"` to have a job on an open PR rewrite the PR's title and body from its `/work/pr.md`. Pass `after` to hold the job until other jobs end; see [Chains](#chains). |
-| `job_status(job_id)` | Returns `queued`, `running`, `pushed`, `no_changes`, `failed`, or `cancelled`, plus the PR URL, `result.usage` (cost and turns for `claude`, token counts for `codex` and `antigravity`), `result.pr_edited` for a job with `pr_body`, `ci` once pushed, and `trigger` for a job started from GitHub. |
+| `job_status(job_id)` | Returns `queued`, `running`, `pushed`, `no_changes`, `failed`, or `cancelled`, plus the PR URL, `result.usage` (cost and turns for `claude`, token counts for `codex` and `antigravity`), `result.pr_edited` for a job with `pr_body`, `result.peak_mem_mb` and `mem_total_mb` for every job, `ci` once pushed, and `trigger` for a job started from GitHub. |
 | `job_logs(job_id, tail?)` | Tails the log. `claude` and `codex` add one `[agent]` line per tool call as they run. |
 | `job_transcript(job_id, tail?, grep?)` | Returns the agent's own output stream, kept after the VM is gone. Use it to check what the agent actually ran. |
 | `cancel_job(job_id)` | Cancels a queued job, or stops a running one and removes its VM. |

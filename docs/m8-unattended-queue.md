@@ -1,6 +1,6 @@
 # M8: a queue nobody watches
 
-Status: steps 1 to 4 built; steps 5 to 8 planned. Evidence is from the 33 hermesmoney jobs of 2026-10-20, ids `20261020-002321-1929`
+Status: steps 1 to 5 built, with step 5's hermesmoney numbers pending a run on the mini; steps 6 to 8 planned. Evidence is from the 33 hermesmoney jobs of 2026-10-20, ids `20261020-002321-1929`
 to `20261020-004138-2a54`, read with `job_status`, `job_logs`, and `job_transcript`.
 
 ## The wave loop queues 33 jobs at night and fixes their output by hand in the morning
@@ -427,3 +427,17 @@ What the build changed from the plan:
 - The description is cut at 140 characters by jq, which counts characters rather than bytes.
 - `ci_reported.sha` is the commit the status went on, `HEAD`, not the agent's `sha`.
 - README's CI section describes `ci.json`, and the permission paragraph now asks for Commit statuses write.
+
+### Step 5: peak memory
+
+| Check | Result |
+|---|---|
+| A `shell` job running `node -e 'Buffer.alloc(1<<30, 1); setTimeout(() => {}, 8000)'` reports a peak above 1,000 MB | job `20261020-141158-f310`: `peak_mem_mb: 1208`, `mem_total_mb: 4047`, in a `4G` VM. The log ends `memory: peak 1208 MB of 4047 MB` |
+| An idle `shell` job, for the floor | job `20261020-141158-6075`, `true`: `peak_mem_mb: 147`. That is the VM, the clone, and `gh`, before any agent |
+| hermesmoney's `CARGO_BUILD_JOBS=2 mise run ci` as a `shell` job at 8G, 6G, and 4G, `cpus: 8` | pending: it runs on the mini, which holds the repo's warm disk, after this step is deployed there |
+
+What the build changed from the plan:
+
+- The sampler starts before the root check, so a job that fails at once still reports a peak.
+- `mem_total_mb` for a `4G` VM is 4,047 MB: what the kernel sees after its own reservations.
+- The sampler is a bash loop around `awk` on `/proc/meminfo`; it writes the file only when the peak grows.
